@@ -5,12 +5,15 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
+#include "wheel_robot_controller.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
+#include <driver/uart.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -64,6 +67,7 @@ private:
 
     Button boot_button_;
     LcdDisplay* display_;
+    WheelRobotController robot_;
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -136,14 +140,146 @@ private:
     // 物联网初始化，添加对 AI 可见设备
     void InitializeTools() {
         static LampController lamp(LAMP_GPIO);
+        auto& mcp_server = McpServer::GetInstance();
+
+        mcp_server.AddTool("robot.forward",
+                           "让双轮足机器人前进（往前走）。可指定速度(1-100)和持续时间(毫秒)，"
+                           "不指定持续时间则一直前进直到停止。",
+                           PropertyList({Property("speed", kPropertyTypeInteger, 60, 1, 100),
+                                         Property("duration", kPropertyTypeInteger, 0, 0, 600000)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.Forward(properties["speed"].value<int>(),
+                                              properties["duration"].value<int>());
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.backward",
+                           "让双轮足机器人后退。可指定速度(1-100)和持续时间(毫秒)。",
+                           PropertyList({Property("speed", kPropertyTypeInteger, 60, 1, 100),
+                                         Property("duration", kPropertyTypeInteger, 0, 0, 600000)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.Backward(properties["speed"].value<int>(),
+                                               properties["duration"].value<int>());
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.turn_left",
+                           "让双轮足机器人原地左转。可指定速度(1-100)和持续时间(毫秒)。",
+                           PropertyList({Property("speed", kPropertyTypeInteger, 60, 1, 100),
+                                         Property("duration", kPropertyTypeInteger, 0, 0, 600000)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.TurnLeft(properties["speed"].value<int>(),
+                                               properties["duration"].value<int>());
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.turn_right",
+                           "让双轮足机器人原地右转。可指定速度(1-100)和持续时间(毫秒)。",
+                           PropertyList({Property("speed", kPropertyTypeInteger, 60, 1, 100),
+                                         Property("duration", kPropertyTypeInteger, 0, 0, 600000)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.TurnRight(properties["speed"].value<int>(),
+                                                properties["duration"].value<int>());
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.spin",
+                           "让双轮足机器人原地转圈。direction 为 L(左转一圈) 或 R(右转一圈)，"
+                           "可指定持续时间(毫秒)。",
+                           PropertyList({Property("direction", kPropertyTypeString, std::string("L")),
+                                         Property("duration", kPropertyTypeInteger, 0, 0, 600000)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.Spin(properties["direction"].value<std::string>(),
+                                           properties["duration"].value<int>());
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.jump",
+                           "让双轮足机器人跳跃。direction 只能取 F(向前)、B(向后)、L(向左)、R(向右)，"
+                           "不填则原地跳。",
+                           PropertyList({Property("direction", kPropertyTypeString, std::string(""))}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.Jump(properties["direction"].value<std::string>());
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.stop", "让双轮足机器人停止所有运动（保持站立）。", PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.Stop();
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.stand", "让双轮足机器人起立（站起来）。", PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.Stand();
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.sit", "让双轮足机器人坐下（蹲下）。", PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.Sit();
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.move_up", "让双轮足机器人机身升高一档。", PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.MoveUp();
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.move_down", "让双轮足机器人机身降低一档。", PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.MoveDown();
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.set_height", "设置双轮足机器人机身高度(0-100)。",
+                           PropertyList({Property("height", kPropertyTypeInteger, 0, 100)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.SetHeight(properties["height"].value<int>());
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.set_speed", "设置双轮足机器人的默认运动速度档位(1-100)。",
+                           PropertyList({Property("speed", kPropertyTypeInteger, 1, 100)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               robot_.SetSpeed(properties["speed"].value<int>());
+                               return true;
+                           });
+
+        mcp_server.AddTool("robot.get_status", "查询双轮足机器人的连接与站立状态。", PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               if (!robot_.IsConnected()) {
+                                   return std::string("未连接");
+                               }
+                               std::string status = robot_.GetLastStatus();
+                               if (status == "STANDING") {
+                                   return std::string("站立中");
+                               }
+                               if (status == "SITTING") {
+                                   return std::string("坐着");
+                               }
+                               return std::string("已连接");
+                           });
     }
 
 public:
     AiSysuEsp32() :
-        boot_button_(BOOT_BUTTON_GPIO) {
+        boot_button_(BOOT_BUTTON_GPIO),
+        robot_(UART_NUM_1, ROBOT_UART_TX_PIN, ROBOT_UART_RX_PIN) {
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
+
+        // 握手成功后语音提示（回调运行在串口接收任务中，UI/音频操作调度回主任务）
+        robot_.SetConnectedCallback([]() {
+            Application::GetInstance().Schedule([]() {
+                Application::GetInstance().Alert("轮足机器人",
+                                                 "已经链接上轮足机器人，您可以通过语音控制我运动",
+                                                 "happy", Lang::Sounds::OGG_SUCCESS);
+            });
+        });
+
         InitializeTools();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();

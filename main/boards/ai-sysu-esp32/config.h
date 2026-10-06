@@ -30,6 +30,10 @@
 
 #define BUILTIN_LED_GPIO        GPIO_NUM_48
 #define BOOT_BUTTON_GPIO        GPIO_NUM_0
+
+// 轮足机器人串口（与小车串口交叉连接：本板 TX -> 小车 RX，本板 RX -> 小车 TX，并共地）
+#define ROBOT_UART_TX_PIN       GPIO_NUM_10
+#define ROBOT_UART_RX_PIN       GPIO_NUM_11
 #define TOUCH_BUTTON_GPIO       GPIO_NUM_NC
 #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_NC
 #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
