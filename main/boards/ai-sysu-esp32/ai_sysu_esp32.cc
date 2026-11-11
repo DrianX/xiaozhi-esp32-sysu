@@ -1,6 +1,7 @@
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
 #include "display/lcd_display.h"
+#include "lvgl_theme.h"
 #include "system_reset.h"
 #include "application.h"
 #include "button.h"
@@ -10,6 +11,8 @@
 #include "led/single_led.h"
 #include "motor_controller.h"
 #include "servo_controller.h"
+#include "adc_battery_monitor.h"
+#include "assets/lang_config.h"
 
 #include <driver/ledc.h>
 #include <esp_log.h>
@@ -117,6 +120,38 @@ static void HardwareSelfTestTask(void* arg) {
 }
 #endif
 
+// 充电时把右上角电池图标显示为绿色
+class AiSysuLcdDisplay : public SpiLcdDisplay {
+public:
+    AiSysuLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width,
+                     int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y,
+                     bool swap_xy)
+        : SpiLcdDisplay(panel_io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y,
+                        swap_xy) {}
+
+    void UpdateStatusBar(bool update_all = false) override {
+        SpiLcdDisplay::UpdateStatusBar(update_all);
+
+        int level = 0;
+        bool charging = false;
+        bool discharging = false;
+        if (!Board::GetInstance().GetBatteryLevel(level, charging, discharging)) {
+            return;
+        }
+
+        auto* theme = static_cast<LvglTheme*>(current_theme_);
+        DisplayLockGuard lock(this);
+        if (battery_label_ == nullptr) {
+            return;
+        }
+        if (charging) {
+            lv_obj_set_style_text_color(battery_label_, lv_color_hex(0x00C853), 0);
+        } else if (theme != nullptr) {
+            lv_obj_set_style_text_color(battery_label_, theme->text_color(), 0);
+        }
+    }
+};
+
 class AiSysuEsp32 : public WifiBoard {
 private:
 
@@ -125,6 +160,8 @@ private:
     MotorController* motor_a_ = nullptr;
     MotorController* motor_b_ = nullptr;
     ServoController* servos_ = nullptr;
+    AdcBatteryMonitor* battery_monitor_ = nullptr;
+    bool low_battery_notified_ = false;
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -179,7 +216,7 @@ private:
 #ifdef  LCD_TYPE_GC9A01_SERIAL
         panel_config.vendor_config = &gc9107_vendor_config;
 #endif
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = new AiSysuLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -225,6 +262,13 @@ private:
 #endif
     }
 
+    void InitializeBattery() {
+        battery_monitor_ =
+            new AdcBatteryMonitor(BATTERY_ADC_UNIT, BATTERY_ADC_CHANNEL, BATTERY_UPPER_RESISTOR,
+                                  BATTERY_LOWER_RESISTOR, BATTERY_CHARGING_PIN,
+                                  BATTERY_CHARGING_ACTIVE_LOW, BATTERY_VOLTAGE_SCALE);
+    }
+
 public:
     AiSysuEsp32() :
         boot_button_(BOOT_BUTTON_GPIO) {
@@ -234,6 +278,7 @@ public:
         InitializeTools();
         InitializeMotor();
         InitializeServo();
+        InitializeBattery();
         InitializeSelfTest();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
@@ -259,6 +304,28 @@ public:
 
     virtual Display* GetDisplay() override {
         return display_;
+    }
+
+    virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+        if (battery_monitor_ == nullptr) {
+            return false;
+        }
+
+        charging = battery_monitor_->IsCharging();
+        discharging = battery_monitor_->IsDischarging();
+        level = battery_monitor_->GetBatteryLevel();
+
+        // 低电量且未充电时提示一次；恢复充电或电量回升后重新布防
+        bool low_battery = discharging && level <= BATTERY_LOW_LEVEL;
+        if (low_battery && !low_battery_notified_) {
+            low_battery_notified_ = true;
+            if (auto display = GetDisplay(); display != nullptr) {
+                display->ShowNotification(Lang::Strings::BATTERY_NEED_CHARGE, 5000);
+            }
+        } else if (!low_battery) {
+            low_battery_notified_ = false;
+        }
+        return true;
     }
 
     virtual Backlight* GetBacklight() override {

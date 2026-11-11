@@ -15,6 +15,9 @@
   - 通道 B：IN1=GPIO18，IN2=GPIO21
 - 舵机：4 路 SG90（50 Hz PWM）
   - 1 号=GPIO14，2 号=GPIO15，3 号=GPIO16，4 号=GPIO17
+- 电池：3.7V 1500mAh 锂电池，充电限制电压 4.2V
+  - 电量检测：电池 -> 200k -> GPIO1(ADC1_CH0) -> 100k -> GND
+  - 充电状态：TP4057 的 CHRG -> GPIO2（开漏，充电时拉低）
 
 ## 状态
 
@@ -45,6 +48,18 @@ DRV8833 的 `nSLEEP` 悬空时芯片不会输出，直接接 3.3V 即可；若�
 - `self.servo.set_angle`：`channel` 为 1-4，`angle` 为 0-180 度
 - `self.servo.get_angles`：读取 4 路舵机当前角度
 - `self.servo.center_all`：所有舵机回中位（90 度）
+
+## 电池与充电
+
+- 屏幕右上角实时显示电池图标（8 档电量），充电时显示带闪电的绿色电池图标
+- 电量低于 `BATTERY_LOW_LEVEL`（默认 15%）且未充电时，状态栏弹出
+  “电量低，请充电”提示
+- 充电状态来自 TP4057 的 CHRG 引脚，默认低电平表示正在充电；若模块
+  极性相反，把 `BATTERY_CHARGING_ACTIVE_LOW` 改成 0
+- 上电时会自动启用 GPIO2 的内部上拉；如果模块板上已有上拉到 5V 的
+  电阻/LED，请确认 GPIO2 电压不超过 3.3V
+- 电压标定：`BATTERY_VOLTAGE_SCALE` 默认 1.03（万用表 4.12V 对应固件
+  4.00V）。更换电阻或重新标定时，按 `实际电压 / 显示电压` 调整
 
 ## 构建
 
