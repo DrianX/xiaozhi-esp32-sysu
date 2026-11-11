@@ -2,6 +2,7 @@
 #define _BOARD_CONFIG_H_
 
 #include <driver/gpio.h>
+#include <esp_adc/adc_oneshot.h>
 
 #define AUDIO_INPUT_SAMPLE_RATE  16000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
@@ -319,5 +320,23 @@
 #define SERVO_TEST_ANGLE_LOW 45
 #define SERVO_TEST_ANGLE_HIGH 135
 #define SERVO_TEST_STEP_MS 400
+
+// 电池电量检测：电池 -> 200k -> GPIO1(ADC1_CH0) -> 100k -> GND
+#define BATTERY_ADC_UNIT ADC_UNIT_1
+#define BATTERY_ADC_CHANNEL ADC_CHANNEL_0
+#define BATTERY_UPPER_RESISTOR 200000.0f
+#define BATTERY_LOWER_RESISTOR 100000.0f
+
+// 电压标定系数：显示值 = 实测值 * 该系数。
+// 当前台架实测：万用表 4.12V，固件显示 4.00V -> 4.12 / 4.00 = 1.03。
+// 更换电阻或重新校准后按实际测量值调整。
+#define BATTERY_VOLTAGE_SCALE 1.03f
+
+// TP4057 充电状态：CHRG 为开漏输出，充电时拉低
+#define BATTERY_CHARGING_PIN GPIO_NUM_2
+#define BATTERY_CHARGING_ACTIVE_LOW 1
+
+// 低电量提醒阈值（百分比），低于该值且未充电时提示充电
+#define BATTERY_LOW_LEVEL 15
 
 #endif // _BOARD_CONFIG_H_
