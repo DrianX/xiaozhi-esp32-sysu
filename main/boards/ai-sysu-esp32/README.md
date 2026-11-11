@@ -21,8 +21,7 @@
 
 ## 状态
 
-当前 IO 引脚暂与 `bread-compact-wifi-lcd` 保持一致，待根据实际原理图修改
-`config.h` 中的引脚定义。
+板级引脚和功能已完成验证，完整引脚定义见 `main/boards/ai-sysu-esp32/config.h`。
 
 ## 硬件自检
 
