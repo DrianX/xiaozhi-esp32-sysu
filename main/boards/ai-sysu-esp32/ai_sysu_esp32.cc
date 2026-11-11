@@ -8,7 +8,10 @@
 #include "mcp_server.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
+#include "motor_controller.h"
+#include "servo_controller.h"
 
+#include <driver/ledc.h>
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_vendor.h>
@@ -59,11 +62,69 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
 
 #define TAG "AiSysuEsp32"
 
+#if MOTOR_BOOT_SELF_TEST || SERVO_BOOT_SELF_TEST
+struct SelfTestContext {
+    MotorController* motor_a = nullptr;
+    MotorController* motor_b = nullptr;
+    ServoController* servos = nullptr;
+};
+
+static SelfTestContext self_test_ctx;
+
+#if MOTOR_BOOT_SELF_TEST
+static void RunMotorTest(MotorController* motor, const char* label) {
+    if (motor == nullptr) {
+        return;
+    }
+    ESP_LOGI(TAG, "%s self-test: forward %d%%", label, MOTOR_TEST_SPEED);
+    motor->SetSpeed(MOTOR_TEST_SPEED);
+    vTaskDelay(pdMS_TO_TICKS(MOTOR_TEST_DURATION_MS));
+
+    ESP_LOGI(TAG, "%s self-test: reverse %d%%", label, MOTOR_TEST_SPEED);
+    motor->SetSpeed(-MOTOR_TEST_SPEED);
+    vTaskDelay(pdMS_TO_TICKS(MOTOR_TEST_DURATION_MS));
+
+    motor->Stop();
+    ESP_LOGI(TAG, "%s self-test: done", label);
+}
+#endif  // MOTOR_BOOT_SELF_TEST
+
+static void HardwareSelfTestTask(void* arg) {
+    auto* ctx = static_cast<SelfTestContext*>(arg);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+#if MOTOR_BOOT_SELF_TEST
+    RunMotorTest(ctx->motor_a, "Motor A");
+    RunMotorTest(ctx->motor_b, "Motor B");
+#endif
+
+#if SERVO_BOOT_SELF_TEST
+    if (ctx->servos != nullptr) {
+        for (int channel = 1; channel <= ctx->servos->GetCount(); ++channel) {
+            ESP_LOGI(TAG, "Servo %d self-test", channel);
+            ctx->servos->SetAngle(channel, SERVO_TEST_ANGLE_LOW);
+            vTaskDelay(pdMS_TO_TICKS(SERVO_TEST_STEP_MS));
+            ctx->servos->SetAngle(channel, SERVO_TEST_ANGLE_HIGH);
+            vTaskDelay(pdMS_TO_TICKS(SERVO_TEST_STEP_MS));
+            ctx->servos->SetAngle(channel, SERVO_INIT_ANGLE);
+            vTaskDelay(pdMS_TO_TICKS(SERVO_TEST_STEP_MS));
+        }
+    }
+#endif
+
+    ESP_LOGI(TAG, "Hardware self-test: done");
+    vTaskDelete(nullptr);
+}
+#endif
+
 class AiSysuEsp32 : public WifiBoard {
 private:
 
     Button boot_button_;
     LcdDisplay* display_;
+    MotorController* motor_a_ = nullptr;
+    MotorController* motor_b_ = nullptr;
+    ServoController* servos_ = nullptr;
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -138,6 +199,32 @@ private:
         static LampController lamp(LAMP_GPIO);
     }
 
+    void InitializeMotor() {
+        motor_a_ = new MotorController(MOTOR_A_IN1_GPIO, MOTOR_A_IN2_GPIO, LEDC_CHANNEL_2,
+                                       LEDC_CHANNEL_3, "motor_a", MOTOR_A_NSLEEP_GPIO);
+        motor_b_ = new MotorController(MOTOR_B_IN1_GPIO, MOTOR_B_IN2_GPIO, LEDC_CHANNEL_4,
+                                       LEDC_CHANNEL_5, "motor_b", MOTOR_B_NSLEEP_GPIO);
+    }
+
+    void InitializeServo() {
+        static const gpio_num_t servo_gpios[SERVO_COUNT] = {SERVO_1_GPIO, SERVO_2_GPIO,
+                                                            SERVO_3_GPIO, SERVO_4_GPIO};
+        // 通道 0/1/6/7 留给舵机；本板未使用背光（背光默认占用通道 0）
+        static const ledc_channel_t servo_channels[SERVO_COUNT] = {
+            LEDC_CHANNEL_0, LEDC_CHANNEL_1, LEDC_CHANNEL_6, LEDC_CHANNEL_7};
+        servos_ = new ServoController(servo_gpios, servo_channels, SERVO_COUNT);
+    }
+
+    void InitializeSelfTest() {
+#if MOTOR_BOOT_SELF_TEST || SERVO_BOOT_SELF_TEST
+        self_test_ctx.motor_a = motor_a_;
+        self_test_ctx.motor_b = motor_b_;
+        self_test_ctx.servos = servos_;
+        xTaskCreate(HardwareSelfTestTask, "hw_self_test", 4096, &self_test_ctx,
+                    tskIDLE_PRIORITY + 2, nullptr);
+#endif
+    }
+
 public:
     AiSysuEsp32() :
         boot_button_(BOOT_BUTTON_GPIO) {
@@ -145,6 +232,9 @@ public:
         InitializeLcdDisplay();
         InitializeButtons();
         InitializeTools();
+        InitializeMotor();
+        InitializeServo();
+        InitializeSelfTest();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
         }

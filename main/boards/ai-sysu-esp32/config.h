@@ -286,4 +286,38 @@
 // A MCP Test: Control a lamp
 #define LAMP_GPIO GPIO_NUM_NC
 
+// DRV8833 双路直流电机驱动，每路电机占用 IN1/IN2 两路 PWM
+// 通道 A
+#define MOTOR_A_IN1_GPIO GPIO_NUM_12
+#define MOTOR_A_IN2_GPIO GPIO_NUM_13
+// 通道 B
+#define MOTOR_B_IN1_GPIO GPIO_NUM_18
+#define MOTOR_B_IN2_GPIO GPIO_NUM_21
+// 若 nSLEEP 由 GPIO 控制则填写引脚号；nSLEEP 直接接 3.3V 时保持 GPIO_NUM_NC
+#define MOTOR_A_NSLEEP_GPIO GPIO_NUM_NC
+#define MOTOR_B_NSLEEP_GPIO GPIO_NUM_NC
+
+// 上电自检：正转 -> 反转 -> 停止，用于台架验证；量产时可置 0 关闭
+#define MOTOR_BOOT_SELF_TEST 1
+#define MOTOR_TEST_SPEED 80
+#define MOTOR_TEST_DURATION_MS 1500
+
+// SG90 舵机，接线顺序为 GPIO14/15/16/17
+#define SERVO_1_GPIO GPIO_NUM_14
+#define SERVO_2_GPIO GPIO_NUM_15
+#define SERVO_3_GPIO GPIO_NUM_16
+#define SERVO_4_GPIO GPIO_NUM_17
+#define SERVO_COUNT 4
+
+// SG90 脉宽范围（0-180 度）
+#define SERVO_PWM_MIN_PULSE_US 500
+#define SERVO_PWM_MAX_PULSE_US 2500
+#define SERVO_INIT_ANGLE 90
+
+// 上电自检：逐个舵机扫到低位 -> 高位 -> 回中位
+#define SERVO_BOOT_SELF_TEST 1
+#define SERVO_TEST_ANGLE_LOW 45
+#define SERVO_TEST_ANGLE_HIGH 135
+#define SERVO_TEST_STEP_MS 400
+
 #endif // _BOARD_CONFIG_H_
