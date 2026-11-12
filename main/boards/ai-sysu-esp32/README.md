@@ -18,6 +18,7 @@
 - 电池：3.7V 1500mAh 锂电池，充电限制电压 4.2V
   - 电量检测：电池 -> 200k -> GPIO1(ADC1_CH0) -> 100k -> GND
   - 充电状态：TP4057 的 CHRG -> GPIO2（开漏，充电时拉低）
+- 摄像头：1MP USB UVC 免驱摄像头（ESP32-S3 原生 USB，D-/DM=GPIO19，D+/DP=GPIO20）
 
 ## 状态
 
@@ -59,6 +60,31 @@ DRV8833 的 `nSLEEP` 悬空时芯片不会输出，直接接 3.3V 即可；若�
   电阻/LED，请确认 GPIO2 电压不超过 3.3V
 - 电压标定：`BATTERY_VOLTAGE_SCALE` 默认 1.03（万用表 4.12V 对应固件
   4.00V）。更换电阻或重新标定时，按 `实际电压 / 显示电压` 调整
+
+## USB 摄像头
+
+- 使用 1MP USB UVC 免驱摄像头（替代 OV2640/OV3660 的 USB 款），走 ESP32-S3 原生 USB Host：
+  - 摄像头 `D-`/`DM` -> GPIO19
+  - 摄像头 `D+`/`DP` -> GPIO20
+  - 摄像头 5V -> 5V，GND -> GND（摄像头必须单独供 5V，数据线尽量短）
+- 该接线已在实物上验证通过。注意 ESP32-S3 的 `D-` 是 GPIO19、`D+` 是 GPIO20，
+  两者接反时串口会报 `ENUM: CHECK_SHORT_DEV_DESC FAILED`，摄像头无法枚举
+- 摄像头占用原生 USB 后，烧录/串口请继续使用板载 CH340 的 UART 口
+- 板级 Kconfig 默认已打开 USB UVC 和 MJPEG 输入（`BOARD_AI_SYSU_USB_CAMERA`），
+  编译时会自动选择 `CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE` 和
+  `CONFIG_XIAOZHI_CAMERA_ALLOW_JPEG_INPUT`
+- 联网后对设备说“看看前面是什么”，大模型会调用 `self.camera.take_photo`，
+  拍照后通过服务器的 vision 接口识别并回答
+- 正常启动日志：
+
+  ```
+  I (xxx) usb_uvc_device: Waiting for UVC device to be enumerated...
+  I (xxx) EspVideo: Camera init success
+  I (xxx) MCP: Add tool: self.camera.take_photo
+  ```
+
+- 未插入摄像头时，初始化会等待约 10 秒后继续启动；识别异常时可打开
+  `CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE` 查看 USB 枚举和格式协商日志
 
 ## 构建
 

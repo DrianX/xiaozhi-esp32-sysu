@@ -13,6 +13,7 @@
 #include "servo_controller.h"
 #include "adc_battery_monitor.h"
 #include "assets/lang_config.h"
+#include "esp_video.h"
 
 #include <driver/ledc.h>
 #include <esp_log.h>
@@ -162,6 +163,7 @@ private:
     ServoController* servos_ = nullptr;
     AdcBatteryMonitor* battery_monitor_ = nullptr;
     bool low_battery_notified_ = false;
+    EspVideo* camera_ = nullptr;
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -269,6 +271,32 @@ private:
                                   BATTERY_CHARGING_ACTIVE_LOW, BATTERY_VOLTAGE_SCALE);
     }
 
+#ifdef CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE
+    void InitializeCamera() {
+        // ESP32-S3 原生 USB（D- = GPIO19, D+ = GPIO20），USB Host 由 esp_video 初始化
+        esp_video_init_usb_uvc_config_t usb_uvc_config = {
+            .uvc = {
+                .uvc_dev_num = 1,
+                .task_stack = 4096,
+                .task_priority = 5,
+                .task_affinity = -1,
+            },
+            .usb = {
+                .init_usb_host_lib = true,
+                .task_stack = 4096,
+                .task_priority = 5,
+                .task_affinity = -1,
+            },
+        };
+
+        esp_video_init_config_t video_config = {
+            .usb_uvc = &usb_uvc_config,
+        };
+
+        camera_ = new EspVideo(video_config);
+    }
+#endif
+
 public:
     AiSysuEsp32() :
         boot_button_(BOOT_BUTTON_GPIO) {
@@ -279,6 +307,9 @@ public:
         InitializeMotor();
         InitializeServo();
         InitializeBattery();
+#ifdef CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE
+        InitializeCamera();
+#endif
         InitializeSelfTest();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
@@ -304,6 +335,10 @@ public:
 
     virtual Display* GetDisplay() override {
         return display_;
+    }
+
+    virtual Camera* GetCamera() override {
+        return camera_;
     }
 
     virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {

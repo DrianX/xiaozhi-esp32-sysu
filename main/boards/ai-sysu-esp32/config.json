@@ -5,7 +5,9 @@
         {
             "name": "ai-sysu-esp32",
             "sdkconfig_append": [
-                "CONFIG_LCD_ST7789_240X240_7PIN=y"
+                "CONFIG_LCD_ST7789_240X240_7PIN=y",
+                "CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE=y",
+                "CONFIG_XIAOZHI_CAMERA_ALLOW_JPEG_INPUT=y"
             ]
         }
     ]
