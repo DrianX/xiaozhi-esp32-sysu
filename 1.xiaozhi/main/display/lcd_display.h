@@ -49,6 +49,8 @@ public:
     virtual void ClearChatMessages() override;
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
     virtual void SetupUI() override;
+    // Rotate the logical UI and the underlying panel orientation together.
+    void SetRotation(lv_display_rotation_t rotation);
     // Add theme switching function
     virtual void SetTheme(Theme* theme) override;
 
