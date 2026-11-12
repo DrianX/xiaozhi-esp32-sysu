@@ -15,6 +15,8 @@
 #include "assets/lang_config.h"
 #include "esp_video.h"
 
+#include <algorithm>
+
 #include <driver/ledc.h>
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -150,6 +152,32 @@ public:
         } else if (theme != nullptr) {
             lv_obj_set_style_text_color(battery_label_, theme->text_color(), 0);
         }
+    }
+
+    void SetPreviewImage(std::unique_ptr<LvglImage> image) override {
+        bool has_image = image != nullptr;
+        LcdDisplay::SetPreviewImage(std::move(image));
+        if (!has_image) {
+            return;
+        }
+
+        DisplayLockGuard lock(this);
+        if (preview_image_ == nullptr || preview_image_cached_ == nullptr) {
+            return;
+        }
+
+        auto* img_dsc = preview_image_cached_->image_dsc();
+        if (img_dsc == nullptr || img_dsc->header.w == 0 || img_dsc->header.h == 0) {
+            return;
+        }
+
+        // 放大到屏幕的 90%，保持宽高比
+        uint32_t target_w = width_ * 9 / 10;
+        uint32_t target_h = height_ * 9 / 10;
+        uint32_t scale = std::min(256u * target_w / img_dsc->header.w,
+                                  256u * target_h / img_dsc->header.h);
+        lv_obj_set_size(preview_image_, width_, height_);
+        lv_image_set_scale(preview_image_, scale);
     }
 };
 
