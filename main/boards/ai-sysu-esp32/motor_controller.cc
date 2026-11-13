@@ -1,3 +1,7 @@
+#include "config.h"
+
+#if AI_SYSU_ENABLE_MOTORS
+
 #include "motor_controller.h"
 
 #include <algorithm>
@@ -187,3 +191,5 @@ void MotorController::RegisterMcpTools() {
                                   ",\"direction\":\"" + direction + "\"}";
                        });
 }
+
+#endif  // AI_SYSU_ENABLE_MOTORS

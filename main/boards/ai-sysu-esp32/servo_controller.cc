@@ -1,3 +1,7 @@
+#include "config.h"
+
+#if AI_SYSU_ENABLE_SERVOS
+
 #include "servo_controller.h"
 
 #include <algorithm>
@@ -143,3 +147,5 @@ void ServoController::RegisterMcpTools() {
                            return true;
                        });
 }
+
+#endif  // AI_SYSU_ENABLE_SERVOS

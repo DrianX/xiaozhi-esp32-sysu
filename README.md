@@ -28,6 +28,54 @@
 
 > 注意：USB 原生口（GPIO19/20）被 UVC 摄像头占用，烧录和串口请走板载 CH340 的 UART。
 
+## 功能开关（config.h）
+
+[config.h](main/boards/ai-sysu-esp32/config.h) 顶部控制可选外设（1=启用，0=关闭）：
+
+| 宏 | 当前 | 说明 |
+|---|---|---|
+| `AI_SYSU_ENABLE_IMU` | 1 | MPU6050 I2C 姿态（串口遥测输出） |
+| `AI_SYSU_ENABLE_TELEMETRY` | 1 | 串口 JSON 遥测，依赖 `AI_SYSU_ENABLE_IMU` |
+| `AI_SYSU_ENABLE_MOTORS` | 0 | 双路 DRV8833 电机、MCP 工具、上电自检 |
+| `AI_SYSU_ENABLE_SERVOS` | 0 | 4 路 SG90 舵机、MCP 工具、上电自检 |
+| `AI_SYSU_ENABLE_CAMERA` | 0 | USB UVC 摄像头和 `self.camera.take_photo` |
+
+### 如何打开某个功能
+
+1. 打开 [main/boards/ai-sysu-esp32/config.h](main/boards/ai-sysu-esp32/config.h)
+2. 在文件最顶部找到对应的 `AI_SYSU_ENABLE_*`，把 `0` 改成 `1`
+3. 保存后重新 Build（只改功能开关不需要重新配置 CMake）
+4. 烧录后按对应功能的接线和使用说明操作
+
+例如只启用电机和舵机：
+
+```c
+#define AI_SYSU_ENABLE_IMU 0
+#define AI_SYSU_ENABLE_TELEMETRY 0
+#define AI_SYSU_ENABLE_MOTORS 1
+#define AI_SYSU_ENABLE_SERVOS 1
+#define AI_SYSU_ENABLE_CAMERA 0
+```
+
+例如只启用姿态 + 串口遥测：
+
+```c
+#define AI_SYSU_ENABLE_IMU 1
+#define AI_SYSU_ENABLE_TELEMETRY 1
+#define AI_SYSU_ENABLE_MOTORS 0
+#define AI_SYSU_ENABLE_SERVOS 0
+#define AI_SYSU_ENABLE_CAMERA 0
+```
+
+注意事项：
+
+- `AI_SYSU_ENABLE_TELEMETRY` 必须同时打开 `AI_SYSU_ENABLE_IMU`
+- `MOTOR_BOOT_SELF_TEST` / `SERVO_BOOT_SELF_TEST` 只在对应功能打开时生效
+- 摄像头需要 USB UVC Kconfig；本板 `BOARD_AI_SYSU_USB_CAMERA` 已默认选中，
+  通常只需打开 `AI_SYSU_ENABLE_CAMERA`
+- 也可以用命令行宏覆盖（config.h 使用 `#ifndef`）：`-DAI_SYSU_ENABLE_MOTORS=1`
+- 关闭某个功能后，对应驱动不参与编译，也不会初始化硬件或注册 MCP 工具
+
 ## 硬件与引脚
 
 | 功能 | 引脚 | 说明 |
@@ -42,6 +90,8 @@
 | 舵机 1-4 | 14, 15, 16, 17 | SG90，50 Hz，LEDC 通道 0/1/6/7 |
 | 电池检测 | 1（ADC1_CH0） | 电池 -> 200k -> GPIO1 -> 100k -> GND |
 | 充电检测 | 2 | TP4057 CHRG，开漏，低电平=充电中 |
+| MPU6050 | SDA=4, SCL=5 | I2C 400 kHz，地址 0x68，数据走串口遥测 |
+| 串口遥测 | UART0（CH340） | 115200 8N1，50 Hz JSON，见 scripts/mpu6050/docs/serial-output-spec.md |
 | USB 摄像头 | D-=19, D+=20 | ESP32-S3 原生 USB Host |
 
 完整引脚和参数定义见 [config.h](main/boards/ai-sysu-esp32/config.h)。
@@ -52,10 +102,16 @@
 |---|---|
 | 板级入口、显示子类、自检、`GetBatteryLevel` / `GetCamera` | [ai_sysu_esp32.cc](main/boards/ai-sysu-esp32/ai_sysu_esp32.cc) |
 | 引脚、自检、电池等板级参数 | [config.h](main/boards/ai-sysu-esp32/config.h) |
+| 可选外设开关（IMU/电机/舵机/摄像头） | [config.h](main/boards/ai-sysu-esp32/config.h) 顶部 |
 | 构建变体、Kconfig 默认值 | [config.json](main/boards/ai-sysu-esp32/config.json)、[Kconfig.projbuild](main/Kconfig.projbuild) |
 | 直流电机驱动（DRV8833 / LEDC） | [motor_controller.h](main/boards/ai-sysu-esp32/motor_controller.h)、[motor_controller.cc](main/boards/ai-sysu-esp32/motor_controller.cc) |
 | 舵机驱动（SG90 / 50 Hz PWM） | [servo_controller.h](main/boards/ai-sysu-esp32/servo_controller.h)、[servo_controller.cc](main/boards/ai-sysu-esp32/servo_controller.cc) |
 | 电池 ADC / 充电检测公共驱动 | [adc_battery_monitor.cc](main/boards/common/adc_battery_monitor.cc) |
+| MPU6050 姿态驱动（I2C + Mahony 四元数滤波） | [mpu6050.h](main/boards/ai-sysu-esp32/mpu6050.h)、[mpu6050.cc](main/boards/ai-sysu-esp32/mpu6050.cc) |
+| 上位机串口遥测规范 | [scripts/mpu6050/docs/serial-output-spec.md](scripts/mpu6050/docs/serial-output-spec.md) |
+| 上位机仪表盘（Web Serial + 3D） | [scripts/mpu6050/](scripts/mpu6050/)，入口 [start.bat](scripts/mpu6050/start.bat) |
+| 上位机示例固件（Arduino） | [scripts/mpu6050/firmware/esp32_mpu6050_json/](scripts/mpu6050/firmware/esp32_mpu6050_json/) |
+| 固件端遥测发送 | [ai_sysu_esp32.cc](main/boards/ai-sysu-esp32/ai_sysu_esp32.cc) 的 `SendImuTelemetry()` |
 | USB UVC 摄像头公共驱动 | [esp_video.cc](main/boards/common/esp_video.cc) |
 | 摄像头 MCP 工具 | [mcp_server.cc](main/mcp_server.cc) 中 `self.camera.take_photo` |
 | 显示 / 状态栏 | [lcd_display.cc](main/display/lcd_display.cc)、[lvgl_display.cc](main/display/lvgl_display/lvgl_display.cc) |
@@ -66,17 +122,21 @@
 
 | 想改什么 | 改哪里 |
 |---|---|
+| 启用/关闭 IMU、电机、舵机、摄像头 | [config.h](main/boards/ai-sysu-esp32/config.h) 顶部的 `AI_SYSU_ENABLE_*`，1=启用，0=关闭 |
 | 换引脚 / 换外设 | [config.h](main/boards/ai-sysu-esp32/config.h)。电机/舵机还要确认 [ai_sysu_esp32.cc](main/boards/ai-sysu-esp32/ai_sysu_esp32.cc) 里 `InitializeMotor()` / `InitializeServo()` 的 LEDC 通道不冲突 |
 | 改默认音量 | [audio_codec.h](main/audio/audio_codec.h) 的 `output_volume_`；NVS 里存过音量时以 NVS 为准 |
 | 改电机速度/自检 | `MOTOR_TEST_SPEED`、`MOTOR_TEST_DURATION_MS`、`MOTOR_BOOT_SELF_TEST`；运行期走 `self.motor_a.*` / `self.motor_b.*` |
 | 改舵机行程/中位 | `SERVO_PWM_MIN_PULSE_US`、`SERVO_PWM_MAX_PULSE_US`、`SERVO_INIT_ANGLE`、`SERVO_TEST_*` |
 | 改低电量阈值/标定 | `BATTERY_LOW_LEVEL`、`BATTERY_VOLTAGE_SCALE`、`BATTERY_CHARGING_ACTIVE_LOW` |
+| 改 MPU6050 引脚/地址 | `IMU_SDA_GPIO`、`IMU_SCL_GPIO`、`IMU_I2C_ADDR`、`IMU_I2C_SPEED_HZ`、`IMU_SAMPLE_INTERVAL_MS` |
+| 改遥测波特率/开关 | `TELEMETRY_ENABLE`、`TELEMETRY_UART_NUM`、`TELEMETRY_BAUD_RATE`、`TELEMETRY_SILENCE_LOGS` |
+| 改姿态轴向/滤波 | 轴向、符号和 Mahony 参数在 [mpu6050.cc](main/boards/ai-sysu-esp32/mpu6050.cc) 的 `Update()` |
 | 改充电图标颜色 | [ai_sysu_esp32.cc](main/boards/ai-sysu-esp32/ai_sysu_esp32.cc) 的 `AiSysuLcdDisplay::UpdateStatusBar()`（当前绿色 `0x00C853`） |
 | 改拍照预览大小 | `AiSysuLcdDisplay::SetPreviewImage()`（当前屏幕 90%） |
 | 换屏幕型号 | Kconfig 的 `DISPLAY_LCD_TYPE` 默认值；`config.json` 的 `sdkconfig_append` |
 | 换默认板型 | [Kconfig.projbuild](main/Kconfig.projbuild) 中 `choice BOARD_TYPE` 的默认值 |
 | 加 MCP 工具 | 在对应控制器构造函数里 `McpServer::GetInstance().AddTool(...)`，参考 [lamp_controller.h](main/boards/common/lamp_controller.h) |
-| 加新的板级 `.cc` 文件 | 放 `main/boards/ai-sysu-esp32/` 后必须重新配置（见下方构建注意事项） |
+| 加新的板级 `.cc` 文件 | 放 `main/boards/ai-sysu-esp32/` 后需重新配置 CMake（`idf.py reconfigure` 或 Full Clean） |
 
 ## 关键配置项（config.h）
 
@@ -87,6 +147,10 @@
 - 电池：`BATTERY_ADC_UNIT=ADC_UNIT_1`、`BATTERY_ADC_CHANNEL=ADC_CHANNEL_0`、
   `BATTERY_UPPER/LOWER_RESISTOR=200k/100k`、`BATTERY_CHARGING_PIN=GPIO2`、
   `BATTERY_CHARGING_ACTIVE_LOW=1`、`BATTERY_LOW_LEVEL=15`、`BATTERY_VOLTAGE_SCALE=1.03`
+- MPU6050：`IMU_I2C_PORT=0`、`IMU_SDA_GPIO=4`、`IMU_SCL_GPIO=5`、`IMU_I2C_ADDR=0x68`、
+  `IMU_I2C_SPEED_HZ=400000`、`IMU_SAMPLE_INTERVAL_MS=20`（50 Hz）
+- 遥测：`AI_SYSU_ENABLE_TELEMETRY=1`（在 config.h 顶部，需同时打开 IMU）、
+  `TELEMETRY_UART_NUM=0`、`TELEMETRY_BAUD_RATE=115200`、`TELEMETRY_SILENCE_LOGS=1`
 
 ## 功能与语音控制
 
@@ -105,6 +169,46 @@
 - 摄像头：`self.camera.take_photo(question)`，示例语音“看看前面是什么”
 - 电池/音量/屏幕：`self.get_device_status`、`self.audio_speaker.set_volume`、
   `self.screen.set_theme`
+
+MPU6050 数据只通过串口遥测输出（50 Hz JSON），**不在屏幕上显示**。
+
+姿态由 **Mahony 四元数滤波** 计算：陀螺负责动态跟踪，加速度计修正 pitch/roll；
+yaw 只能靠陀螺积分，没有磁力计，长时间仍会缓慢漂移（上电时会做一次零偏校准，
+校准期间保持静止）。需要绝对 yaw 请加磁力计（如 QMC5883L），改用 9 轴融合。
+
+## 上位机串口遥测
+
+协议规范见 [scripts/mpu6050/docs/serial-output-spec.md](scripts/mpu6050/docs/serial-output-spec.md)，
+上位机仪表盘在 [scripts/mpu6050/](scripts/mpu6050/)：
+
+1. 在 `config.h` 打开 `AI_SYSU_ENABLE_IMU=1`、`AI_SYSU_ENABLE_TELEMETRY=1`
+2. 编译烧录，**关闭 VS Code 串口监视器**（Web Serial 需要独占串口）
+3. 双击 [scripts/mpu6050/start.bat](scripts/mpu6050/start.bat)，会启动本地静态服务器并打开 Chrome/Edge
+4. 点击“选择串口”，选择 ESP32 的 CH340 串口，波特率 **115200**
+
+仪表盘的详细架构、3D 模型和验证清单见
+[scripts/mpu6050/README.md](scripts/mpu6050/README.md)。
+
+固件端输出：
+
+- 串口：UART0（板载 CH340），**115200 8N1**，无流控（网页波特率也要设成 115200）
+- **50 Hz**，每行一个完整 JSON，以 `\n` 结尾
+- 字段：`roll/pitch/yaw`（deg）、`ax/ay/az`（g）、`gx/gy/gz`（°/s）、`temp`（°C）
+- 遥测开始后全局日志级别降到 WARN，避免 INFO 日志混入数据流；需要日志时把
+  `TELEMETRY_SILENCE_LOGS` 改成 0
+- 上位机通过 Web Serial 连接时需**独占串口**，先关闭 VS Code 串口监视器
+- 当前使用 115200；50 Hz 下 JSON 约占 70% 带宽。如果网页出现丢帧，可以把
+  `IMU_SAMPLE_INTERVAL_MS` 调大（例如 25 ms，40 Hz），或把 `TELEMETRY_BAUD_RATE`
+  提高到 921600 / 1152000 并同步修改网页波特率
+
+示例帧：
+
+```json
+{"roll":1.25,"pitch":-3.40,"yaw":128.60,"ax":0.018,"ay":-0.012,"az":0.997,"gx":0.4,"gy":-0.2,"gz":1.1,"temp":31.5}
+```
+
+坐标约定：X+ 前方、Y+ 左方、Z+ 上方；roll 右侧下沉为正、pitch 机头抬起为正、
+yaw 左转为正。pitch 已按规范（机头抬起为正）输出。
 
 ## USB 摄像头
 
@@ -166,6 +270,10 @@
 | 摄像头无枚举，`CHECK_SHORT_DEV_DESC FAILED` | DM/DP 接反（D-=GPIO19，D+=GPIO20）、5V/GND、数据线过长 |
 | 电机不转 | DRV8833 `nSLEEP` 接 3.3V、`VM` 电机电源、与 ESP32 共地 |
 | 充电图标不出现/一直充电 | `BATTERY_CHARGING_ACTIVE_LOW` 极性与模块是否一致 |
+| MPU6050 初始化失败 / 串口没有遥测数据 | 地址是 0x68 还是 0x69（AD0）、SDA/SCL 是否接反、模块 3.3V 供电和上拉；看串口 `MPU6050` 日志 |
+| 网页收不到遥测数据 | 固件和网页波特率必须一致（当前 115200）、选对 COM 口、先关闭 VS Code 串口监视器 |
+| 遥测数据中混有日志 | 确认 `TELEMETRY_SILENCE_LOGS=1`；遥测开始前的启动日志会被网页忽略 |
+| 白屏/重启 | 先看串口复位原因：`Reset reason: 9` 或 `Brownout` 是供电/接线，`4` 是 panic（保留 backtrace） |
 | 电量显示偏差大 | 分压电阻实际值、GPIO1 对地 100nF、`BATTERY_VOLTAGE_SCALE` |
 | 默认音量不生效 | NVS 里已有 `audio/output_volume`，语音调一次或清 NVS |
 | 新增 `.cc` 后链接报 undefined reference | 执行 `idf.py reconfigure` 或 Full Clean |

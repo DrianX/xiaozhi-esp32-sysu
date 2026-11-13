@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#070b10">
+  <title>MPU-6050 姿态遥测台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1118'/%3E%3Cpath d='M20 40V24h24v16' fill='none' stroke='%233987e5' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='7' fill='none' stroke='%23199e70' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='2' fill='%23eef4fb'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="vendor/uplot/uPlot.min.css">
+  <link rel="stylesheet" href="src/styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js",
+        "three/addons/": "./vendor/three/addons/",
+        "uplot": "./vendor/uplot/uPlot.esm.js"
+      }
+    }
+  </script>
+</head>
+<body data-palette="#3987e5,#d95926,#199e70">
+  <div class="app">
+    <header class="topbar">
+      <div class="brand" aria-label="MPU-6050 姿态遥测台">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 40 40" fill="none">
+            <path d="M9 13.5h22v13H9z" stroke="currentColor" stroke-width="1.4" opacity=".6"/>
+            <path d="M13 17h14v6H13z" stroke="currentColor" stroke-width="1.2"/>
+            <path d="M9 17H4m0 6h5m22-6h5m0 6h-5M16 13.5V9m8 4.5V9M16 26.5V31m8-4.5V31" stroke="currentColor" stroke-width="1.2" opacity=".8"/>
+            <circle cx="20" cy="20" r="2.2" fill="currentColor"/>
+          </svg>
+        </span>
+        <div class="brand-copy">
+          <span class="brand-kicker">ESP32 · IMU TELEMETRY</span>
+          <h1 class="brand-title">姿态遥测台 <em>MPU-6050</em></h1>
+        </div>
+      </div>
+
+      <div class="top-actions">
+        <div class="global-state" id="global-state" data-tone="idle">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span class="global-state-text" id="global-state-text">未连接</span>
+          <span class="global-rate" id="global-rate">0.0 Hz</span>
+        </div>
+        <button class="btn ghost demo-btn" id="demo-btn" type="button" aria-pressed="false">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path class="icon-play" d="M5 3.5 12 8l-7 4.5v-9Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            <rect class="icon-stop" x="4.6" y="4.6" width="6.8" height="6.8" rx="1" fill="currentColor"/>
+          </svg>
+          <span>演示数据</span>
+        </button>
+        <button class="icon-btn top-help" id="help-open" type="button" aria-label="打开使用说明" title="使用说明">
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="7.2" stroke="currentColor" stroke-width="1.4"/><path d="M8.1 7.6A2 2 0 0 1 12 8.2c0 1.5-2 1.6-2 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="10" cy="14" r=".9" fill="currentColor"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <aside class="sidebar" aria-label="连接与实时读数">
+        <section class="panel connection-panel" aria-labelledby="connection-heading">
+          <div class="panel-head">
+            <div>
+              <h2 id="connection-heading">串口连接</h2>
+              <p class="eyebrow">LINK / WEB SERIAL</p>
+            </div>
+            <span class="micro-tag" id="serial-support-tag">CHROME · EDGE</span>
+          </div>
+
+          <div class="inline-alert" id="serial-warning" hidden></div>
+
+          <div class="form-grid">
+            <div class="field field-full">
+              <label for="port-select">端口</label>
+              <div class="inline-control">
+                <select id="port-select" aria-describedby="port-hint">
+                  <option value="">尚无已授权串口</option>
+                </select>
+                <button class="btn secondary compact" id="port-pick" type="button">选择串口</button>
+                <button class="icon-btn port-refresh" id="port-refresh" type="button" aria-label="刷新串口列表" title="刷新已授权串口；新设备请点「选择串口」">
+                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M15.6 7.2A6 6 0 1 0 16 10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M15.9 4.2v3.5h-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="baud-input">波特率</label>
+              <div class="unit-input">
+                <input id="baud-input" type="number" inputmode="numeric" min="300" max="20000000" step="1" value="115200" list="baud-presets">
+                <span>bps</span>
+              </div>
+              <datalist id="baud-presets">
+                <option value="9600"></option>
+                <option value="57600"></option>
+                <option value="115200"></option>
+                <option value="230400"></option>
+                <option value="460800"></option>
+                <option value="921600"></option>
+                <option value="1152000"></option>
+                <option value="1500000"></option>
+                <option value="2000000"></option>
+              </datalist>
+            </div>
+            <div class="field">
+              <label for="protocol-select">数据格式</label>
+              <select id="protocol-select">
+                <option value="auto">自动识别</option>
+                <option value="json">JSON 行</option>
+                <option value="csv9">CSV · 9 列</option>
+                <option value="csv6">CSV · 6 列</option>
+                <option value="kv">键值对</option>
+              </select>
+            </div>
+          </div>
+
+          <p class="field-hint" id="port-hint">仅显示已授权串口 · 默认 115200</p>
+
+          <button class="btn primary block connect-btn" id="connect-btn" type="button" disabled>
+            <span class="btn-led" aria-hidden="true"></span>
+            <span id="connect-label">连接串口</span>
+          </button>
+
+          <div class="conn-meta">
+            <div class="conn-stat">
+              <span>链路状态</span>
+              <strong id="conn-state">待连接</strong>
+            </div>
+            <div class="conn-stat">
+              <span>数据速率</span>
+              <strong id="rate-value">0.0 Hz</strong>
+            </div>
+            <div class="conn-stat">
+              <span>忽略行</span>
+              <strong id="ignored-value">0</strong>
+            </div>
+          </div>
+
+          <details class="raw-panel" id="raw-panel">
+            <summary>
+              <span>原始数据</span>
+              <span class="raw-count" id="raw-count">0</span>
+            </summary>
+            <pre id="raw-log" aria-label="最近接收的串口原始数据">尚无数据</pre>
+          </details>
+        </section>
+
+        <section class="panel telemetry-panel" id="telemetry-panel" aria-labelledby="telemetry-heading">
+          <div class="panel-head">
+            <div>
+              <h2 id="telemetry-heading">实时读数</h2>
+              <p class="eyebrow">LIVE TELEMETRY</p>
+            </div>
+            <span class="live-stamp" id="last-update">等待数据</span>
+          </div>
+
+          <div class="readout-group">
+            <div class="readout-head">
+              <span>姿态角</span>
+              <span>DEG</span>
+            </div>
+            <div class="att-axis" data-axis="roll">
+              <div class="att-axis-top">
+                <span class="axis-label"><i class="series-dot series-roll" aria-hidden="true"></i>Roll <em>横滚</em></span>
+                <span class="axis-value"><span class="num" id="val-roll">—</span><span class="unit">°</span></span>
+              </div>
+              <div class="meter" role="presentation">
+                <span class="meter-track"></span>
+                <span class="meter-zero"></span>
+                <span class="meter-fill" id="meter-roll"></span>
+                <span class="meter-knob" id="knob-roll"></span>
+              </div>
+            </div>
+            <div class="att-axis" data-axis="pitch">
+              <div class="att-axis-top">
+                <span class="axis-label"><i class="series-dot series-pitch" aria-hidden="true"></i>Pitch <em>俯仰</em></span>
+                <span class="axis-value"><span class="num" id="val-pitch">—</span><span class="unit">°</span></span>
+              </div>
+              <div class="meter" role="presentation">
+                <span class="meter-track"></span>
+                <span class="meter-zero"></span>
+                <span class="meter-fill" id="meter-pitch"></span>
+                <span class="meter-knob" id="knob-pitch"></span>
+              </div>
+            </div>
+            <div class="att-axis" data-axis="yaw">
+              <div class="att-axis-top">
+                <span class="axis-label"><i class="series-dot series-yaw" aria-hidden="true"></i>Yaw <em>偏航</em></span>
+                <span class="axis-value"><span class="num" id="val-yaw">—</span><span class="unit">°</span></span>
+              </div>
+              <div class="meter" role="presentation">
+                <span class="meter-track"></span>
+                <span class="meter-zero"></span>
+                <span class="meter-fill" id="meter-yaw"></span>
+                <span class="meter-knob" id="knob-yaw"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="readout-group">
+            <div class="readout-head">
+              <span>加速度</span>
+              <span>G</span>
+            </div>
+            <div class="vector-grid">
+              <div class="vec-cell">
+                <span class="vec-label"><i class="series-dot series-x" aria-hidden="true"></i>X</span>
+                <span class="vec-value" id="val-ax">—</span>
+              </div>
+              <div class="vec-cell">
+                <span class="vec-label"><i class="series-dot series-y" aria-hidden="true"></i>Y</span>
+                <span class="vec-value" id="val-ay">—</span>
+              </div>
+              <div class="vec-cell">
+                <span class="vec-label"><i class="series-dot series-z" aria-hidden="true"></i>Z</span>
+                <span class="vec-value" id="val-az">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="readout-group">
+            <div class="readout-head">
+              <span>角速度</span>
+              <span>°/S</span>
+            </div>
+            <div class="vector-grid">
+              <div class="vec-cell">
+                <span class="vec-label"><i class="series-dot series-x" aria-hidden="true"></i>X</span>
+                <span class="vec-value" id="val-gx">—</span>
+              </div>
+              <div class="vec-cell">
+                <span class="vec-label"><i class="series-dot series-y" aria-hidden="true"></i>Y</span>
+                <span class="vec-value" id="val-gy">—</span>
+              </div>
+              <div class="vec-cell">
+                <span class="vec-label"><i class="series-dot series-z" aria-hidden="true"></i>Z</span>
+                <span class="vec-value" id="val-gz">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="stat-strip">
+            <div class="mini-stat">
+              <span>温度</span>
+              <strong id="temp-value">—</strong>
+              <em>°C</em>
+            </div>
+            <div class="mini-stat">
+              <span>样本</span>
+              <strong id="sample-count">0</strong>
+              <em>pts</em>
+            </div>
+            <div class="mini-stat">
+              <span>运行</span>
+              <strong id="uptime-value">00:00</strong>
+              <em>mm:ss</em>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="panel viewer-panel" id="viewer-panel" aria-labelledby="viewer-heading">
+        <div class="viewer-canvas" id="viewer-canvas" aria-hidden="true"></div>
+        <div class="viewer-glow" aria-hidden="true"></div>
+
+        <div class="viewer-topbar">
+          <div class="viewer-heading-wrap">
+            <div>
+              <h2 id="viewer-heading">空间姿态</h2>
+              <p class="eyebrow">3D ATTITUDE / ESP32 MODEL</p>
+            </div>
+            <span class="viewer-live" id="viewer-live" data-tone="idle">
+              <i aria-hidden="true"></i><span id="viewer-live-text">等待数据</span>
+            </span>
+          </div>
+
+          <div class="viewer-actions">
+            <details class="calib">
+              <summary class="icon-btn" title="视图校准" aria-label="打开视图校准">
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 6h12M4 14h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="6" r="1.8" fill="#0d141d" stroke="currentColor" stroke-width="1.3"/><circle cx="13" cy="14" r="1.8" fill="#0d141d" stroke="currentColor" stroke-width="1.3"/></svg>
+              </summary>
+              <div class="calib-panel">
+                <div class="calib-title">
+                  <strong>视图校准</strong>
+                  <span>仅影响 3D 朝向</span>
+                </div>
+                <label class="check-row"><input type="checkbox" id="invert-roll"><span>反向 Roll</span></label>
+                <label class="check-row"><input type="checkbox" id="invert-pitch"><span>反向 Pitch</span></label>
+                <label class="check-row"><input type="checkbox" id="invert-yaw"><span>反向 Yaw</span></label>
+                <p class="calib-note">若模型倾斜方向与实物相反，请逐项勾选。</p>
+              </div>
+            </details>
+            <button class="icon-btn" id="freeze-btn" type="button" aria-pressed="false" aria-label="冻结三维视角姿态" title="冻结 / 跟随姿态">
+              <svg class="icon-freeze" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M7 4v12M13 4v12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            </button>
+            <button class="icon-btn" id="reset-view" type="button" aria-label="复位三维视角" title="复位视角">
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4.3 8.4A6.2 6.2 0 1 1 4 11.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M4.3 4.6v3.9h3.9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button class="icon-btn" id="fullscreen-btn" type="button" aria-label="全屏查看三维模型" title="全屏">
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M7.5 4H4v3.5M12.5 4H16v3.5M7.5 16H4v-3.5M12.5 16H16v-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="viewer-empty" id="viewer-empty">
+          <div class="empty-glyph" aria-hidden="true">
+            <svg viewBox="0 0 44 44" fill="none"><path d="M10 15.5h24v15H10z" stroke="currentColor" stroke-width="1.3"/><path d="M15 20h14v6H15z" stroke="currentColor" stroke-width="1.1" opacity=".7"/><path d="M10 19H5m0 6h5m24-6h5m0 6h-5" stroke="currentColor" stroke-width="1.2" opacity=".5"/></svg>
+          </div>
+          <strong>等待遥测数据</strong>
+          <span>连接串口，或开启演示数据</span>
+        </div>
+
+        <div class="viewer-footer">
+          <div class="heading-chip">
+            <span class="heading-label">YAW</span>
+            <span class="heading-value" id="heading-value">000.0°</span>
+          </div>
+          <div class="axis-key" aria-hidden="true">
+            <span><i class="series-dot series-x"></i>X</span>
+            <span><i class="series-dot series-y"></i>Y</span>
+            <span><i class="series-dot series-z"></i>Z</span>
+          </div>
+          <div class="viewer-hint">
+            <span class="model-source" id="model-source">模型预览</span>
+            <span class="hint-sep">/</span>
+            <span>拖动旋转 · 滚轮缩放</span>
+          </div>
+        </div>
+
+        <div class="frozen-badge" id="frozen-badge" hidden>姿态已冻结</div>
+        <div class="viewer-fallback" id="viewer-fallback" hidden></div>
+      </section>
+
+      <section class="panel charts-panel" aria-labelledby="charts-heading">
+        <div class="panel-head charts-head">
+          <div>
+            <h2 id="charts-heading">实时曲线</h2>
+            <p class="eyebrow">ROLLING WINDOW</p>
+          </div>
+          <div class="charts-tools">
+            <div class="segmented" id="window-control" role="group" aria-label="曲线时间窗口">
+              <button type="button" data-window="10">10s</button>
+              <button type="button" data-window="30" class="is-active" aria-pressed="true">30s</button>
+              <button type="button" data-window="60">60s</button>
+            </div>
+            <button class="icon-btn" id="table-open" type="button" aria-label="以表格查看数据" title="数据表">
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3.2" y="4.2" width="13.6" height="11.6" rx="1.4" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 8h13M8 8v7.5" stroke="currentColor" stroke-width="1.2"/></svg>
+            </button>
+            <button class="icon-btn" id="export-csv" type="button" aria-label="导出 CSV 数据" title="导出 CSV">
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3.8v8.4m0 0 3-3m-3 3-3-3M4.5 14.2v1.2c0 .5.4.9.9.9h9.2c.5 0 .9-.4.9-.9v-1.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="chart-stack">
+          <article class="chart-card">
+            <header class="chart-head">
+              <div class="chart-title"><h3>姿态角</h3><span>deg</span></div>
+              <div class="legend" aria-label="姿态角系列">
+                <span class="legend-item"><i class="legend-line series-roll"></i>Roll</span>
+                <span class="legend-item"><i class="legend-line series-pitch"></i>Pitch</span>
+                <span class="legend-item"><i class="legend-line series-yaw"></i>Yaw</span>
+              </div>
+            </header>
+            <div class="chart-mount" id="chart-attitude">
+              <div class="chart-empty">等待数据</div>
+              <div class="chart-tooltip" hidden></div>
+            </div>
+          </article>
+
+          <article class="chart-card">
+            <header class="chart-head">
+              <div class="chart-title"><h3>加速度</h3><span>g</span></div>
+              <div class="legend" aria-label="加速度系列">
+                <span class="legend-item"><i class="legend-line series-x"></i>X</span>
+                <span class="legend-item"><i class="legend-line series-y"></i>Y</span>
+                <span class="legend-item"><i class="legend-line series-z"></i>Z</span>
+              </div>
+            </header>
+            <div class="chart-mount" id="chart-accel">
+              <div class="chart-empty">等待数据</div>
+              <div class="chart-tooltip" hidden></div>
+            </div>
+          </article>
+
+          <article class="chart-card">
+            <header class="chart-head">
+              <div class="chart-title"><h3>角速度</h3><span>°/s</span></div>
+              <div class="legend" aria-label="角速度系列">
+                <span class="legend-item"><i class="legend-line series-x"></i>X</span>
+                <span class="legend-item"><i class="legend-line series-y"></i>Y</span>
+                <span class="legend-item"><i class="legend-line series-z"></i>Z</span>
+              </div>
+            </header>
+            <div class="chart-mount" id="chart-gyro">
+              <div class="chart-empty">等待数据</div>
+              <div class="chart-tooltip" hidden></div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="app-dialog" id="table-dialog" aria-labelledby="table-dialog-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="table-dialog-title">数据表</h2>
+        <p id="table-dialog-sub">最新 200 条采样 · 实时更新</p>
+      </div>
+      <button class="icon-btn dialog-close" type="button" data-close-dialog="table-dialog" aria-label="关闭数据表">
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m6 6 8 8M14 6l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="dialog-body table-body">
+      <div class="table-wrap">
+        <table id="data-table">
+          <thead>
+            <tr>
+              <th scope="col">时间</th>
+              <th scope="col">Roll °</th>
+              <th scope="col">Pitch °</th>
+              <th scope="col">Yaw °</th>
+              <th scope="col">Ax g</th>
+              <th scope="col">Ay g</th>
+              <th scope="col">Az g</th>
+              <th scope="col">Gx °/s</th>
+              <th scope="col">Gy °/s</th>
+              <th scope="col">Gz °/s</th>
+              <th scope="col">Temp °C</th>
+            </tr>
+          </thead>
+          <tbody id="data-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="app-dialog help-dialog" id="help-dialog" aria-labelledby="help-dialog-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="help-dialog-title">使用说明</h2>
+        <p>Web Serial · 本地实时姿态观测</p>
+      </div>
+      <button class="icon-btn dialog-close" type="button" data-close-dialog="help-dialog" aria-label="关闭使用说明">
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m6 6 8 8M14 6l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="dialog-body help-body">
+      <section>
+        <h3>启动</h3>
+        <p>双击 <code>start.bat</code>，页面会自动在 Chrome 或 Edge 中打开。Web Serial 只支持 Chromium 内核浏览器，并且需要通过 <code>localhost</code> 访问。</p>
+      </section>
+      <section>
+        <h3>连接 ESP32</h3>
+        <ol>
+          <li>点击「选择串口」，在浏览器弹出的设备窗口中选择 ESP32。</li>
+          <li>确认波特率（默认 <code>115200</code>，需与下位机一致）。</li>
+          <li>点击「连接串口」。浏览器出于隐私限制，下拉框中只显示已经授权的端口。</li>
+        </ol>
+        <p>拔插设备后，点击端口右侧的刷新按钮更新列表。从未授权过的新设备不会自动出现，需要再点一次「选择串口」在浏览器设备窗口中授权。</p>
+      </section>
+      <section>
+        <h3>串口数据格式</h3>
+        <p>每行一条数据，支持以下格式，单位：姿态 <code>deg</code>、加速度 <code>g</code>、角速度 <code>°/s</code>、温度 <code>°C</code>。</p>
+        <pre><code>{"roll":1.25,"pitch":-3.40,"yaw":128.6,"ax":0.02,"ay":-0.01,"az":1.00,"gx":0.4,"gy":-0.2,"gz":1.1,"temp":31.5}</code></pre>
+        <p>CSV（9 列）：<code>roll,pitch,yaw,ax,ay,az,gx,gy,gz</code></p>
+        <p>CSV（6 列）：<code>ax,ay,az,gx,gy,gz</code>，仅由加速度估算 Roll / Pitch。</p>
+        <p>键值对：<code>roll=1.25 pitch=-3.4 yaw=128.6 ax=0.02 ...</code></p>
+        <p>若下位机格式不同，请查看「原始数据」核对，并在 <code>src/protocol.js</code> 中补充字段别名。</p>
+      </section>
+      <section>
+        <h3>三维模型与校准</h3>
+        <p>ESP32 模型来自工作目录中的 <code>esp32-3D模型.step</code>，已转换为经 Meshopt 压缩的 <code>assets/esp32.glb</code>。页面会先显示轻量预览模型并立即响应姿态，高清模型在后台载入完成后自动替换，不会出现阻塞式加载界面。</p>
+        <p>默认姿态约定：机体 X 朝前、Y 朝左、Z 朝上；Roll 正值右侧下沉，Pitch 正值抬头，Yaw 正值俯视逆时针。若固件符号或安装方向不同，打开视图右上角的「视图校准」逐项反向（该设置只影响 3D 显示）。CSV 与 JSON 的串口数据规范见 <code>docs/serial-output-spec.md</code>。</p>
+      </section>
+      <section>
+        <h3>曲线与导出</h3>
+        <p>曲线窗口支持 10 / 30 / 60 秒；鼠标悬停可查看十字线和同步数值。右上角按钮可打开数据表或导出当前缓冲的 CSV。没有硬件时，可点击顶部「演示数据」预览全部效果。</p>
+        <p>Yaw 在 ±180° 回绕处会出现竖直跳变，这是角度表示方式造成的，不代表数据异常。</p>
+      </section>
+    </div>
+  </dialog>
+
+  <div class="toast-region" id="toast-region" role="status" aria-live="polite"></div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

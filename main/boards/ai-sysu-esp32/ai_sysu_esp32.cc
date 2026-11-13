@@ -9,16 +9,30 @@
 #include "mcp_server.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
+#if AI_SYSU_ENABLE_MOTORS
 #include "motor_controller.h"
+#endif
+#if AI_SYSU_ENABLE_SERVOS
 #include "servo_controller.h"
+#endif
 #include "adc_battery_monitor.h"
 #include "assets/lang_config.h"
+#if AI_SYSU_ENABLE_CAMERA
 #include "esp_video.h"
+#endif
+#if AI_SYSU_ENABLE_IMU
+#include "mpu6050.h"
+#endif
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
 
 #include <driver/ledc.h>
+#include <driver/uart.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
@@ -68,16 +82,101 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
 
 #define TAG "AiSysuEsp32"
 
-#if MOTOR_BOOT_SELF_TEST || SERVO_BOOT_SELF_TEST
+#if AI_SYSU_ENABLE_IMU && AI_SYSU_ENABLE_TELEMETRY
+// 用整数定点输出，避免 newlib-nano 的浮点 printf 问题
+static void FormatFixed(char* out, size_t size, float value, int decimals) {
+    long scale = (decimals == 3) ? 1000 : (decimals == 2) ? 100 : 10;
+    long scaled = lroundf(value * scale);
+    bool negative = scaled < 0;
+    if (negative) {
+        scaled = -scaled;
+    }
+    if (decimals == 3) {
+        snprintf(out, size, "%s%ld.%03ld", negative ? "-" : "", scaled / 1000, scaled % 1000);
+    } else if (decimals == 2) {
+        snprintf(out, size, "%s%ld.%02ld", negative ? "-" : "", scaled / 100, scaled % 100);
+    } else {
+        snprintf(out, size, "%s%ld.%01ld", negative ? "-" : "", scaled / 10, scaled % 10);
+    }
+}
+
+static void InitializeTelemetry() {
+    ESP_ERROR_CHECK(
+        uart_set_baudrate(static_cast<uart_port_t>(TELEMETRY_UART_NUM), TELEMETRY_BAUD_RATE));
+#if TELEMETRY_SILENCE_LOGS
+    // 上位机要求正式输出后不要混入日志
+    esp_log_level_set("*", ESP_LOG_WARN);
+#endif
+}
+
+static void SendImuTelemetry(const Mpu6050& imu) {
+    float roll = imu.roll();
+    float pitch = imu.pitch();
+    float yaw = imu.yaw();
+    float ax = imu.ax();
+    float ay = imu.ay();
+    float az = imu.az();
+    float gx = imu.gx();
+    float gy = imu.gy();
+    float gz = imu.gz();
+    float temp = imu.temperature();
+
+    if (!std::isfinite(roll) || !std::isfinite(pitch) || !std::isfinite(yaw) ||
+        !std::isfinite(ax) || !std::isfinite(ay) || !std::isfinite(az) || !std::isfinite(gx) ||
+        !std::isfinite(gy) || !std::isfinite(gz) || !std::isfinite(temp)) {
+        return;  // 绝不发送 nan / inf
+    }
+
+    char roll_s[16];
+    char pitch_s[16];
+    char yaw_s[16];
+    char ax_s[16];
+    char ay_s[16];
+    char az_s[16];
+    char gx_s[16];
+    char gy_s[16];
+    char gz_s[16];
+    char temp_s[16];
+    FormatFixed(roll_s, sizeof(roll_s), roll, 2);
+    FormatFixed(pitch_s, sizeof(pitch_s), pitch, 2);
+    FormatFixed(yaw_s, sizeof(yaw_s), yaw, 2);
+    FormatFixed(ax_s, sizeof(ax_s), ax, 3);
+    FormatFixed(ay_s, sizeof(ay_s), ay, 3);
+    FormatFixed(az_s, sizeof(az_s), az, 3);
+    FormatFixed(gx_s, sizeof(gx_s), gx, 1);
+    FormatFixed(gy_s, sizeof(gy_s), gy, 1);
+    FormatFixed(gz_s, sizeof(gz_s), gz, 1);
+    FormatFixed(temp_s, sizeof(temp_s), temp, 1);
+
+    char line[256];
+    int len = snprintf(line, sizeof(line),
+                       "{\"roll\":%s,\"pitch\":%s,\"yaw\":%s,"
+                       "\"ax\":%s,\"ay\":%s,\"az\":%s,"
+                       "\"gx\":%s,\"gy\":%s,\"gz\":%s,\"temp\":%s}\n",
+                       roll_s, pitch_s, yaw_s, ax_s, ay_s, az_s, gx_s, gy_s, gz_s, temp_s);
+    if (len > 0 && len < static_cast<int>(sizeof(line))) {
+        // 控制台 UART 没有通过 uart_driver_install 安装，uart_write_bytes 会报
+        // "uart driver error"；走 stdio/控制台路径即可。
+        fwrite(line, 1, len, stdout);
+        fflush(stdout);
+    }
+}
+#endif  // AI_SYSU_ENABLE_IMU && AI_SYSU_ENABLE_TELEMETRY
+
+#if (AI_SYSU_ENABLE_MOTORS && MOTOR_BOOT_SELF_TEST) || (AI_SYSU_ENABLE_SERVOS && SERVO_BOOT_SELF_TEST)
 struct SelfTestContext {
+#if AI_SYSU_ENABLE_MOTORS
     MotorController* motor_a = nullptr;
     MotorController* motor_b = nullptr;
+#endif
+#if AI_SYSU_ENABLE_SERVOS
     ServoController* servos = nullptr;
+#endif
 };
 
 static SelfTestContext self_test_ctx;
 
-#if MOTOR_BOOT_SELF_TEST
+#if AI_SYSU_ENABLE_MOTORS && MOTOR_BOOT_SELF_TEST
 static void RunMotorTest(MotorController* motor, const char* label) {
     if (motor == nullptr) {
         return;
@@ -93,18 +192,18 @@ static void RunMotorTest(MotorController* motor, const char* label) {
     motor->Stop();
     ESP_LOGI(TAG, "%s self-test: done", label);
 }
-#endif  // MOTOR_BOOT_SELF_TEST
+#endif  // AI_SYSU_ENABLE_MOTORS && MOTOR_BOOT_SELF_TEST
 
 static void HardwareSelfTestTask(void* arg) {
     auto* ctx = static_cast<SelfTestContext*>(arg);
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-#if MOTOR_BOOT_SELF_TEST
+#if AI_SYSU_ENABLE_MOTORS && MOTOR_BOOT_SELF_TEST
     RunMotorTest(ctx->motor_a, "Motor A");
     RunMotorTest(ctx->motor_b, "Motor B");
 #endif
 
-#if SERVO_BOOT_SELF_TEST
+#if AI_SYSU_ENABLE_SERVOS && SERVO_BOOT_SELF_TEST
     if (ctx->servos != nullptr) {
         for (int channel = 1; channel <= ctx->servos->GetCount(); ++channel) {
             ESP_LOGI(TAG, "Servo %d self-test", channel);
@@ -121,7 +220,7 @@ static void HardwareSelfTestTask(void* arg) {
     ESP_LOGI(TAG, "Hardware self-test: done");
     vTaskDelete(nullptr);
 }
-#endif
+#endif  // (AI_SYSU_ENABLE_MOTORS && MOTOR_BOOT_SELF_TEST) || (AI_SYSU_ENABLE_SERVOS && SERVO_BOOT_SELF_TEST)
 
 // 充电时把右上角电池图标显示为绿色
 class AiSysuLcdDisplay : public SpiLcdDisplay {
@@ -179,6 +278,7 @@ public:
         lv_obj_set_size(preview_image_, width_, height_);
         lv_image_set_scale(preview_image_, scale);
     }
+
 };
 
 class AiSysuEsp32 : public WifiBoard {
@@ -186,12 +286,21 @@ private:
 
     Button boot_button_;
     LcdDisplay* display_;
+#if AI_SYSU_ENABLE_MOTORS
     MotorController* motor_a_ = nullptr;
     MotorController* motor_b_ = nullptr;
+#endif
+#if AI_SYSU_ENABLE_SERVOS
     ServoController* servos_ = nullptr;
+#endif
     AdcBatteryMonitor* battery_monitor_ = nullptr;
     bool low_battery_notified_ = false;
+#if AI_SYSU_ENABLE_CAMERA
     EspVideo* camera_ = nullptr;
+#endif
+#if AI_SYSU_ENABLE_IMU
+    Mpu6050* imu_ = nullptr;
+#endif
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -266,13 +375,16 @@ private:
         static LampController lamp(LAMP_GPIO);
     }
 
+#if AI_SYSU_ENABLE_MOTORS
     void InitializeMotor() {
         motor_a_ = new MotorController(MOTOR_A_IN1_GPIO, MOTOR_A_IN2_GPIO, LEDC_CHANNEL_2,
                                        LEDC_CHANNEL_3, "motor_a", MOTOR_A_NSLEEP_GPIO);
         motor_b_ = new MotorController(MOTOR_B_IN1_GPIO, MOTOR_B_IN2_GPIO, LEDC_CHANNEL_4,
                                        LEDC_CHANNEL_5, "motor_b", MOTOR_B_NSLEEP_GPIO);
     }
+#endif
 
+#if AI_SYSU_ENABLE_SERVOS
     void InitializeServo() {
         static const gpio_num_t servo_gpios[SERVO_COUNT] = {SERVO_1_GPIO, SERVO_2_GPIO,
                                                             SERVO_3_GPIO, SERVO_4_GPIO};
@@ -281,12 +393,17 @@ private:
             LEDC_CHANNEL_0, LEDC_CHANNEL_1, LEDC_CHANNEL_6, LEDC_CHANNEL_7};
         servos_ = new ServoController(servo_gpios, servo_channels, SERVO_COUNT);
     }
+#endif
 
     void InitializeSelfTest() {
-#if MOTOR_BOOT_SELF_TEST || SERVO_BOOT_SELF_TEST
+#if (AI_SYSU_ENABLE_MOTORS && MOTOR_BOOT_SELF_TEST) || (AI_SYSU_ENABLE_SERVOS && SERVO_BOOT_SELF_TEST)
+#if AI_SYSU_ENABLE_MOTORS
         self_test_ctx.motor_a = motor_a_;
         self_test_ctx.motor_b = motor_b_;
+#endif
+#if AI_SYSU_ENABLE_SERVOS
         self_test_ctx.servos = servos_;
+#endif
         xTaskCreate(HardwareSelfTestTask, "hw_self_test", 4096, &self_test_ctx,
                     tskIDLE_PRIORITY + 2, nullptr);
 #endif
@@ -299,7 +416,7 @@ private:
                                   BATTERY_CHARGING_ACTIVE_LOW, BATTERY_VOLTAGE_SCALE);
     }
 
-#ifdef CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE
+#if AI_SYSU_ENABLE_CAMERA && defined(CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE)
     void InitializeCamera() {
         // ESP32-S3 原生 USB（D- = GPIO19, D+ = GPIO20），USB Host 由 esp_video 初始化
         esp_video_init_usb_uvc_config_t usb_uvc_config = {
@@ -325,18 +442,61 @@ private:
     }
 #endif
 
+#if AI_SYSU_ENABLE_IMU
+    void InitializeIMU() {
+        imu_ = new Mpu6050(IMU_I2C_PORT, IMU_SDA_GPIO, IMU_SCL_GPIO, IMU_I2C_ADDR,
+                           IMU_I2C_SPEED_HZ);
+        if (!imu_->Init()) {
+            ESP_LOGE(TAG, "MPU6050 init failed");
+            delete imu_;
+            imu_ = nullptr;
+            return;
+        }
+        xTaskCreate(ImuTaskEntry, "imu_task", 6144, this, tskIDLE_PRIORITY + 3, nullptr);
+    }
+
+    static void ImuTaskEntry(void* arg) {
+        static_cast<AiSysuEsp32*>(arg)->ImuLoop();
+    }
+
+    void ImuLoop() {
+        TickType_t last_wake = xTaskGetTickCount();
+        const TickType_t period = pdMS_TO_TICKS(IMU_SAMPLE_INTERVAL_MS);
+        while (true) {
+            if (imu_ != nullptr && imu_->Update()) {
+#if AI_SYSU_ENABLE_TELEMETRY
+                // 50 Hz 串口遥测
+                SendImuTelemetry(*imu_);
+#endif
+            }
+            vTaskDelayUntil(&last_wake, period);
+        }
+    }
+#endif  // AI_SYSU_ENABLE_IMU
+
 public:
     AiSysuEsp32() :
         boot_button_(BOOT_BUTTON_GPIO) {
+        ESP_LOGI(TAG, "Reset reason: %d", static_cast<int>(esp_reset_reason()));
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
         InitializeTools();
+#if AI_SYSU_ENABLE_MOTORS
         InitializeMotor();
+#endif
+#if AI_SYSU_ENABLE_SERVOS
         InitializeServo();
+#endif
         InitializeBattery();
-#ifdef CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE
+#if AI_SYSU_ENABLE_CAMERA && defined(CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE)
         InitializeCamera();
+#endif
+#if AI_SYSU_ENABLE_IMU && AI_SYSU_ENABLE_TELEMETRY
+        InitializeTelemetry();
+#endif
+#if AI_SYSU_ENABLE_IMU
+        InitializeIMU();
 #endif
         InitializeSelfTest();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
@@ -366,7 +526,11 @@ public:
     }
 
     virtual Camera* GetCamera() override {
+#if AI_SYSU_ENABLE_CAMERA
         return camera_;
+#else
+        return nullptr;
+#endif
     }
 
     virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
