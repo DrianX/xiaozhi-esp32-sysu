@@ -2,7 +2,7 @@
 
 #if AI_SYSU_ENABLE_IMU
 
-#include "mpu6050.h"
+#include "qmi8658c.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,37 +12,50 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-static const char* TAG = "MPU6050";
+static const char* TAG = "QMI8658C";
 
 namespace {
-constexpr uint8_t kRegSmplrtDiv = 0x19;
-constexpr uint8_t kRegConfig = 0x1A;
-constexpr uint8_t kRegGyroConfig = 0x1B;
-constexpr uint8_t kRegAccelConfig = 0x1C;
-constexpr uint8_t kRegAccelXoutH = 0x3B;  // 0x3B..0x48: accel/temp/gyro
-constexpr uint8_t kRegPwrMgmt1 = 0x6B;
-constexpr uint8_t kRegWhoAmI = 0x75;
+constexpr uint8_t kRegWhoAmI = 0x00;   // 固定为 0x05
+constexpr uint8_t kRegCtrl1 = 0x02;    // 接口 / 地址自增
+constexpr uint8_t kRegCtrl2 = 0x03;    // 加速度计配置
+constexpr uint8_t kRegCtrl3 = 0x04;    // 陀螺仪配置
+constexpr uint8_t kRegCtrl7 = 0x08;    // 传感器使能
+constexpr uint8_t kRegReset = 0x60;
+constexpr uint8_t kRegDataStart = 0x33;  // TEMP + ACC + GYRO，共 14 字节
+constexpr uint8_t kWhoAmIValue = 0x05;
+constexpr uint8_t kResetValue = 0xB0;
 
-constexpr float kAccelScale = 16384.0f;  // ±2g
-constexpr float kGyroScale = 65.5f;      // ±500 °/s
+// CTRL1: 地址自增，小端
+constexpr uint8_t kCtrl1Config = 0x40;
+// CTRL2: aFS=±4g (bits6:4=001)，aODR=125Hz (0x06)
+constexpr uint8_t kCtrl2Config = 0x16;
+// CTRL3: gFS=±512dps (bits6:4=101)，gODR=125Hz (0x06)
+constexpr uint8_t kCtrl3Config = 0x56;
+// CTRL7: aEN | gEN
+constexpr uint8_t kCtrl7Config = 0x03;
+
+// ±4g -> 4096 LSB/g；±512dps -> 64 LSB/(°/s)
+constexpr float kAccelScale = 4096.0f;
+constexpr float kGyroScale = 64.0f;
 constexpr float kRadToDeg = 57.2957795f;
 constexpr float kDegToRad = 0.0174532925f;
 constexpr float kMahonyKp = 1.0f;
 constexpr float kMahonyKi = 0.02f;
-constexpr float kMaxIntegralFb = 10.0f;  // °/s，限制积分饱和
+constexpr float kMaxIntegralFb = 10.0f;  // °/s
 constexpr int kI2cTimeoutMs = 100;
 constexpr int kGyroCalibrationSamples = 500;
+constexpr size_t kDataLength = 14;  // temp(2) + acc(6) + gyro(6)
 }  // namespace
 
-Mpu6050::Mpu6050(i2c_port_num_t port, gpio_num_t sda_gpio, gpio_num_t scl_gpio,
-                 uint8_t address, uint32_t speed_hz)
+Qmi8658c::Qmi8658c(i2c_port_num_t port, gpio_num_t sda_gpio, gpio_num_t scl_gpio,
+                   uint8_t address, uint32_t speed_hz)
     : port_(port),
       sda_gpio_(sda_gpio),
       scl_gpio_(scl_gpio),
       address_(address),
       speed_hz_(speed_hz) {}
 
-Mpu6050::~Mpu6050() {
+Qmi8658c::~Qmi8658c() {
     if (device_ != nullptr) {
         i2c_master_bus_rm_device(device_);
         device_ = nullptr;
@@ -53,7 +66,7 @@ Mpu6050::~Mpu6050() {
     }
 }
 
-bool Mpu6050::WriteRegister(uint8_t reg, uint8_t value) {
+bool Qmi8658c::WriteRegister(uint8_t reg, uint8_t value) {
     uint8_t buffer[2] = {reg, value};
     esp_err_t err = i2c_master_transmit(device_, buffer, sizeof(buffer), kI2cTimeoutMs);
     if (err != ESP_OK) {
@@ -67,11 +80,10 @@ bool Mpu6050::WriteRegister(uint8_t reg, uint8_t value) {
     return true;
 }
 
-bool Mpu6050::ReadRegisters(uint8_t reg, uint8_t* data, size_t len) {
-    esp_err_t err =
-        i2c_master_transmit_receive(device_, &reg, 1, data, len, kI2cTimeoutMs);
+bool Qmi8658c::ReadRegisters(uint8_t reg, uint8_t* data, size_t len) {
+    esp_err_t err = i2c_master_transmit_receive(device_, &reg, 1, data, len, kI2cTimeoutMs);
     if (err != ESP_OK) {
-        // I2C 接触不良时避免 20Hz 刷屏，每秒最多打印一次
+        // I2C 接触不良时避免 50Hz 刷屏，每秒最多打印一次
         int64_t now_us = esp_timer_get_time();
         if (now_us - last_error_log_us_ > 1000000) {
             last_error_log_us_ = now_us;
@@ -82,7 +94,7 @@ bool Mpu6050::ReadRegisters(uint8_t reg, uint8_t* data, size_t len) {
     return true;
 }
 
-bool Mpu6050::CalibrateGyro() {
+bool Qmi8658c::CalibrateGyro() {
     float sum_x = 0.0f;
     float sum_y = 0.0f;
     float sum_z = 0.0f;
@@ -91,13 +103,13 @@ bool Mpu6050::CalibrateGyro() {
     float sum2_z = 0.0f;
 
     for (int i = 0; i < kGyroCalibrationSamples; ++i) {
-        uint8_t data[14];
-        if (!ReadRegisters(kRegAccelXoutH, data, sizeof(data))) {
+        uint8_t data[kDataLength];
+        if (!ReadRegisters(kRegDataStart, data, sizeof(data))) {
             return false;
         }
-        float raw_x = static_cast<int16_t>((data[8] << 8) | data[9]);
-        float raw_y = static_cast<int16_t>((data[10] << 8) | data[11]);
-        float raw_z = static_cast<int16_t>((data[12] << 8) | data[13]);
+        float raw_x = static_cast<int16_t>((data[9] << 8) | data[8]);
+        float raw_y = static_cast<int16_t>((data[11] << 8) | data[10]);
+        float raw_z = static_cast<int16_t>((data[13] << 8) | data[12]);
         sum_x += raw_x;
         sum_y += raw_y;
         sum_z += raw_z;
@@ -122,95 +134,14 @@ bool Mpu6050::CalibrateGyro() {
     ESP_LOGW(TAG, "gyro bias (raw): x=%.1f y=%.1f z=%.1f", gyro_bias_x_, gyro_bias_y_,
              gyro_bias_z_);
     if (std_x > 2.0f || std_y > 2.0f || std_z > 2.0f) {
-        ESP_LOGW(TAG, "MPU6050 moved during calibration (std=%.1f/%.1f/%.1f deg/s), reboot while still",
+        ESP_LOGW(TAG,
+                 "QMI8658C moved during calibration (std=%.1f/%.1f/%.1f deg/s), reboot while still",
                  std_x, std_y, std_z);
     }
     return true;
 }
 
-bool Mpu6050::Init() {
-    i2c_master_bus_config_t bus_config = {
-        .i2c_port = port_,
-        .sda_io_num = sda_gpio_,
-        .scl_io_num = scl_gpio_,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .intr_priority = 0,
-        .trans_queue_depth = 0,
-        .flags =
-            {
-                .enable_internal_pullup = 1,
-                .allow_pd = 0,
-            },
-    };
-    if (i2c_new_master_bus(&bus_config, &bus_) != ESP_OK) {
-        ESP_LOGE(TAG, "i2c bus init failed");
-        return false;
-    }
-
-    i2c_device_config_t device_config = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = address_,
-        .scl_speed_hz = speed_hz_,
-        .scl_wait_us = 0,
-        .flags =
-            {
-                .disable_ack_check = 0,
-            },
-    };
-    if (i2c_master_bus_add_device(bus_, &device_config, &device_) != ESP_OK) {
-        ESP_LOGE(TAG, "add i2c device failed");
-        return false;
-    }
-
-    uint8_t who_am_i = 0;
-    if (!ReadRegisters(kRegWhoAmI, &who_am_i, 1)) {
-        ESP_LOGE(TAG, "read WHO_AM_I failed");
-        return false;
-    }
-    if (who_am_i == 0x00 || who_am_i == 0xFF) {
-        ESP_LOGE(TAG, "MPU6050 not found (WHO_AM_I=0x%02X)", who_am_i);
-        return false;
-    }
-    // 0x70/0x71/0x73 多为 MPU6500/MPU9250 系列，温度换算公式不同
-    is_mpu6500_ = (who_am_i == 0x70 || who_am_i == 0x71 || who_am_i == 0x73);
-    ESP_LOGI(TAG, "WHO_AM_I=0x%02X", who_am_i);
-
-    // 复位后唤醒，使用 X 轴陀螺 PLL 作为时钟源
-    if (!WriteRegister(kRegPwrMgmt1, 0x80)) {
-        return false;
-    }
-    vTaskDelay(pdMS_TO_TICKS(100));
-    if (!WriteRegister(kRegPwrMgmt1, 0x01)) {
-        return false;
-    }
-    vTaskDelay(pdMS_TO_TICKS(50));
-
-    // 采样率 100Hz，DLPF 44Hz/42Hz，陀螺 ±500°/s，加速度 ±2g
-    if (!WriteRegister(kRegSmplrtDiv, 0x09) || !WriteRegister(kRegConfig, 0x03) ||
-        !WriteRegister(kRegGyroConfig, 0x08) || !WriteRegister(kRegAccelConfig, 0x00)) {
-        return false;
-    }
-    vTaskDelay(pdMS_TO_TICKS(50));
-
-    if (!CalibrateGyro()) {
-        ESP_LOGW(TAG, "gyro calibration failed, yaw may drift faster");
-    }
-
-    // 用第一帧加速度初始化姿态，避免从 0 开始收敛
-    uint8_t data[6];
-    if (ReadRegisters(kRegAccelXoutH, data, sizeof(data))) {
-        float ax = static_cast<int16_t>((data[0] << 8) | data[1]) / kAccelScale;
-        float ay = static_cast<int16_t>((data[2] << 8) | data[3]) / kAccelScale;
-        float az = static_cast<int16_t>((data[4] << 8) | data[5]) / kAccelScale;
-        ResetFromAccel(ax, ay, az);
-    }
-    last_update_us_ = esp_timer_get_time();
-    ESP_LOGI(TAG, "MPU6050 initialized (Mahony filter)");
-    return true;
-}
-
-void Mpu6050::ResetFromAccel(float ax, float ay, float az) {
+void Qmi8658c::ResetFromAccel(float ax, float ay, float az) {
     float roll = std::atan2(ay, az);
     float pitch = std::atan2(-ax, std::sqrt(ay * ay + az * az));
 
@@ -233,19 +164,105 @@ void Mpu6050::ResetFromAccel(float ax, float ay, float az) {
     integral_fb_y_ = 0.0f;
 }
 
-bool Mpu6050::Update() {
-    uint8_t data[14];
-    if (!ReadRegisters(kRegAccelXoutH, data, sizeof(data))) {
+bool Qmi8658c::Init() {
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = port_,
+        .sda_io_num = sda_gpio_,
+        .scl_io_num = scl_gpio_,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .intr_priority = 0,
+        .trans_queue_depth = 0,
+        .flags =
+            {
+                .enable_internal_pullup = 1,
+                .allow_pd = 0,
+            },
+    };
+    if (i2c_new_master_bus(&bus_config, &bus_) != ESP_OK) {
+        ESP_LOGE(TAG, "i2c bus init failed");
         return false;
     }
 
-    float ax = static_cast<int16_t>((data[0] << 8) | data[1]) / kAccelScale;
-    float ay = static_cast<int16_t>((data[2] << 8) | data[3]) / kAccelScale;
-    float az = static_cast<int16_t>((data[4] << 8) | data[5]) / kAccelScale;
+    // QMI8658C 的 I2C 地址由 SA0 决定：0x6A 或 0x6B。两个都试一下。
+    bool found = false;
+    for (int attempt = 0; attempt < 2 && !found; ++attempt) {
+        uint8_t candidate = address_ ^ static_cast<uint8_t>(attempt);
+        i2c_device_config_t device_config = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = candidate,
+            .scl_speed_hz = speed_hz_,
+            .scl_wait_us = 0,
+            .flags =
+                {
+                    .disable_ack_check = 0,
+                },
+        };
+        if (i2c_master_bus_add_device(bus_, &device_config, &device_) != ESP_OK) {
+            device_ = nullptr;
+            continue;
+        }
 
-    float gx = (static_cast<int16_t>((data[8] << 8) | data[9]) - gyro_bias_x_) / kGyroScale;
-    float gy = (static_cast<int16_t>((data[10] << 8) | data[11]) - gyro_bias_y_) / kGyroScale;
-    float gz = (static_cast<int16_t>((data[12] << 8) | data[13]) - gyro_bias_z_) / kGyroScale;
+        uint8_t who_am_i = 0;
+        if (ReadRegisters(kRegWhoAmI, &who_am_i, 1) && who_am_i == kWhoAmIValue) {
+            address_ = candidate;
+            found = true;
+            ESP_LOGI(TAG, "WHO_AM_I=0x%02X at 0x%02X", who_am_i, candidate);
+        } else {
+            i2c_master_bus_rm_device(device_);
+            device_ = nullptr;
+        }
+    }
+    if (!found) {
+        ESP_LOGE(TAG, "QMI8658C not found (tried 0x%02X/0x%02X)", address_,
+                 address_ ^ 0x01);
+        return false;
+    }
+
+    // 复位
+    if (!WriteRegister(kRegReset, kResetValue)) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    // 地址自增、小端；加速度 ±4g / 125Hz；陀螺 ±512dps / 125Hz；使能两轴
+    if (!WriteRegister(kRegCtrl1, kCtrl1Config) || !WriteRegister(kRegCtrl2, kCtrl2Config) ||
+        !WriteRegister(kRegCtrl3, kCtrl3Config) || !WriteRegister(kRegCtrl7, kCtrl7Config)) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    if (!CalibrateGyro()) {
+        ESP_LOGW(TAG, "gyro calibration failed, yaw may drift faster");
+    }
+
+    // 用第一帧加速度初始化姿态，避免从 0 开始收敛
+    uint8_t data[kDataLength];
+    if (ReadRegisters(kRegDataStart, data, sizeof(data))) {
+        float ax = static_cast<int16_t>((data[3] << 8) | data[2]) / kAccelScale;
+        float ay = static_cast<int16_t>((data[5] << 8) | data[4]) / kAccelScale;
+        float az = static_cast<int16_t>((data[7] << 8) | data[6]) / kAccelScale;
+        ResetFromAccel(ax, ay, az);
+    }
+    last_update_us_ = esp_timer_get_time();
+    ESP_LOGI(TAG, "QMI8658C initialized (Mahony filter)");
+    return true;
+}
+
+bool Qmi8658c::Update() {
+    uint8_t data[kDataLength];
+    if (!ReadRegisters(kRegDataStart, data, sizeof(data))) {
+        return false;
+    }
+
+    int16_t raw_temp = static_cast<int16_t>((data[1] << 8) | data[0]);
+    float ax = static_cast<int16_t>((data[3] << 8) | data[2]) / kAccelScale;
+    float ay = static_cast<int16_t>((data[5] << 8) | data[4]) / kAccelScale;
+    float az = static_cast<int16_t>((data[7] << 8) | data[6]) / kAccelScale;
+
+    float gx = (static_cast<int16_t>((data[9] << 8) | data[8]) - gyro_bias_x_) / kGyroScale;
+    float gy = (static_cast<int16_t>((data[11] << 8) | data[10]) - gyro_bias_y_) / kGyroScale;
+    float gz = (static_cast<int16_t>((data[13] << 8) | data[12]) - gyro_bias_z_) / kGyroScale;
 
     if (!std::isfinite(ax) || !std::isfinite(ay) || !std::isfinite(az) || !std::isfinite(gx) ||
         !std::isfinite(gy) || !std::isfinite(gz)) {
@@ -259,10 +276,7 @@ bool Mpu6050::Update() {
     gx_ = gx;
     gy_ = gy;
     gz_ = gz;
-
-    int16_t raw_temperature = static_cast<int16_t>((data[6] << 8) | data[7]);
-    temperature_ = is_mpu6500_ ? raw_temperature / 333.87f + 21.0f
-                               : raw_temperature / 340.0f + 36.53f;
+    temperature_ = raw_temp / 256.0f;
 
     int64_t now_us = esp_timer_get_time();
     float dt = (now_us - last_update_us_) / 1000000.0f;
@@ -275,8 +289,7 @@ bool Mpu6050::Update() {
     }
 
     // Mahony 滤波：用加速度计估计的重力方向修正陀螺零偏。
-    // 这里不做 |a|≈1g 的门控：即使加速度计比例略有偏差，归一化后的方向仍然可用；
-    // 门控会导致静止时完全失去修正，pitch/roll 被陀螺零偏带着一直漂。
+    // 不做 |a|≈1g 门控：即使加速度计比例略有偏差，归一化后的方向仍然可用。
     float accel_norm = std::sqrt(ax * ax + ay * ay + az * az);
     if (accel_norm > 0.01f) {
         float inv_norm = 1.0f / accel_norm;

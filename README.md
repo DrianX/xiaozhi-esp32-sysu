@@ -17,7 +17,7 @@
   2. `Build Project`
   3. `Flash`（选择对应 COM 口）
 
-- 默认板型和屏幕已在 Kconfig 中固定为 `ai-sysu-esp32` + `ST7789 240x240 7PIN`，
+- 默认板型和屏幕已在 Kconfig 中固定为 `ai-sysu-esp32` + `ST7789 240x284`，
   清除工程重新生成 `sdkconfig` 后不需要再手动选择
 - 命令行构建（可选）：
 
@@ -34,7 +34,7 @@
 
 | 宏 | 当前 | 说明 |
 |---|---|---|
-| `AI_SYSU_ENABLE_IMU` | 1 | MPU6050 I2C 姿态（串口遥测输出） |
+| `AI_SYSU_ENABLE_IMU` | 1 | QMI8658C I2C 姿态（串口遥测输出） |
 | `AI_SYSU_ENABLE_TELEMETRY` | 1 | 串口 JSON 遥测，依赖 `AI_SYSU_ENABLE_IMU` |
 | `AI_SYSU_ENABLE_MOTORS` | 0 | 双路 DRV8833 电机、MCP 工具、上电自检 |
 | `AI_SYSU_ENABLE_SERVOS` | 0 | 4 路 SG90 舵机、MCP 工具、上电自检 |
@@ -80,21 +80,23 @@
 
 | 功能 | 引脚 | 说明 |
 |---|---|---|
-| 显示 SPI | MOSI=8, CLK=9, DC=6, RST=7 | CS 和背光为 `GPIO_NUM_NC` |
+| 显示 SPI | MOSI=8, CLK=9, DC=6, RST=7 | ST7789 240x284 7PIN，CS 和背光为 `GPIO_NUM_NC` |
 | 麦克风 I2S | WS=41, SCK=45, DIN=42 | Simplex，无外部 codec |
 | 扬声器 I2S | DOUT=47, BCLK=38, LRCK=39 | 默认音量 25%（NVS 可覆盖） |
 | BOOT 按键 | 0 | 配网/对话 |
 | 板载 LED | 48 | WS2812 |
 | 电机 A | IN1=12, IN2=13 | DRV8833，LEDC 通道 2/3 |
-| 电机 B | IN1=18, IN2=21 | DRV8833，LEDC 通道 4/5 |
+| 电机 B | IN1=10, IN2=11 | DRV8833，LEDC 通道 4/5 |
 | 舵机 1-4 | 14, 15, 16, 17 | SG90，50 Hz，LEDC 通道 0/1/6/7 |
 | 电池检测 | 1（ADC1_CH0） | 电池 -> 200k -> GPIO1 -> 100k -> GND |
 | 充电检测 | 2 | TP4057 CHRG，开漏，低电平=充电中 |
-| MPU6050 | SDA=4, SCL=5 | I2C 400 kHz，地址 0x68，数据走串口遥测 |
+| QMI8658C | SDA=18, SCL=21 | I2C 400 kHz，地址 0x6A/0x6B 自动检测；与电机 B 的 IN1/IN2 复用 |
 | 串口遥测 | UART0（CH340） | 115200 8N1，50 Hz JSON，见 scripts/mpu6050/docs/serial-output-spec.md |
 | USB 摄像头 | D-=19, D+=20 | ESP32-S3 原生 USB Host |
 
 完整引脚和参数定义见 [config.h](main/boards/ai-sysu-esp32/config.h)。
+
+> 圆角屏安全边距由 `DISPLAY_CORNER_INSET` 控制（默认 12px）；如果四个角落仍有内容被裁，可增大到 16/20。拍照预览按屏幕 85% 显示，避免圆角切到照片四角。
 
 ## 代码地图
 
@@ -107,7 +109,7 @@
 | 直流电机驱动（DRV8833 / LEDC） | [motor_controller.h](main/boards/ai-sysu-esp32/motor_controller.h)、[motor_controller.cc](main/boards/ai-sysu-esp32/motor_controller.cc) |
 | 舵机驱动（SG90 / 50 Hz PWM） | [servo_controller.h](main/boards/ai-sysu-esp32/servo_controller.h)、[servo_controller.cc](main/boards/ai-sysu-esp32/servo_controller.cc) |
 | 电池 ADC / 充电检测公共驱动 | [adc_battery_monitor.cc](main/boards/common/adc_battery_monitor.cc) |
-| MPU6050 姿态驱动（I2C + Mahony 四元数滤波） | [mpu6050.h](main/boards/ai-sysu-esp32/mpu6050.h)、[mpu6050.cc](main/boards/ai-sysu-esp32/mpu6050.cc) |
+| QMI8658C 姿态驱动（I2C + Mahony 四元数滤波） | [qmi8658c.h](main/boards/ai-sysu-esp32/qmi8658c.h)、[qmi8658c.cc](main/boards/ai-sysu-esp32/qmi8658c.cc) |
 | 上位机串口遥测规范 | [scripts/mpu6050/docs/serial-output-spec.md](scripts/mpu6050/docs/serial-output-spec.md) |
 | 上位机仪表盘（Web Serial + 3D） | [scripts/mpu6050/](scripts/mpu6050/)，入口 [start.bat](scripts/mpu6050/start.bat) |
 | 上位机示例固件（Arduino） | [scripts/mpu6050/firmware/esp32_mpu6050_json/](scripts/mpu6050/firmware/esp32_mpu6050_json/) |
@@ -128,9 +130,9 @@
 | 改电机速度/自检 | `MOTOR_TEST_SPEED`、`MOTOR_TEST_DURATION_MS`、`MOTOR_BOOT_SELF_TEST`；运行期走 `self.motor_a.*` / `self.motor_b.*` |
 | 改舵机行程/中位 | `SERVO_PWM_MIN_PULSE_US`、`SERVO_PWM_MAX_PULSE_US`、`SERVO_INIT_ANGLE`、`SERVO_TEST_*` |
 | 改低电量阈值/标定 | `BATTERY_LOW_LEVEL`、`BATTERY_VOLTAGE_SCALE`、`BATTERY_CHARGING_ACTIVE_LOW` |
-| 改 MPU6050 引脚/地址 | `IMU_SDA_GPIO`、`IMU_SCL_GPIO`、`IMU_I2C_ADDR`、`IMU_I2C_SPEED_HZ`、`IMU_SAMPLE_INTERVAL_MS` |
+| 改 QMI8658C 引脚/地址 | `IMU_SDA_GPIO`、`IMU_SCL_GPIO`、`IMU_I2C_ADDR`、`IMU_I2C_SPEED_HZ`、`IMU_SAMPLE_INTERVAL_MS` |
 | 改遥测波特率/开关 | `TELEMETRY_ENABLE`、`TELEMETRY_UART_NUM`、`TELEMETRY_BAUD_RATE`、`TELEMETRY_SILENCE_LOGS` |
-| 改姿态轴向/滤波 | 轴向、符号和 Mahony 参数在 [mpu6050.cc](main/boards/ai-sysu-esp32/mpu6050.cc) 的 `Update()` |
+| 改姿态轴向/滤波 | 轴向、符号和 Mahony 参数在 [qmi8658c.cc](main/boards/ai-sysu-esp32/qmi8658c.cc) 的 `Update()` |
 | 改充电图标颜色 | [ai_sysu_esp32.cc](main/boards/ai-sysu-esp32/ai_sysu_esp32.cc) 的 `AiSysuLcdDisplay::UpdateStatusBar()`（当前绿色 `0x00C853`） |
 | 改拍照预览大小 | `AiSysuLcdDisplay::SetPreviewImage()`（当前屏幕 90%） |
 | 换屏幕型号 | Kconfig 的 `DISPLAY_LCD_TYPE` 默认值；`config.json` 的 `sdkconfig_append` |
@@ -147,7 +149,7 @@
 - 电池：`BATTERY_ADC_UNIT=ADC_UNIT_1`、`BATTERY_ADC_CHANNEL=ADC_CHANNEL_0`、
   `BATTERY_UPPER/LOWER_RESISTOR=200k/100k`、`BATTERY_CHARGING_PIN=GPIO2`、
   `BATTERY_CHARGING_ACTIVE_LOW=1`、`BATTERY_LOW_LEVEL=15`、`BATTERY_VOLTAGE_SCALE=1.03`
-- MPU6050：`IMU_I2C_PORT=0`、`IMU_SDA_GPIO=4`、`IMU_SCL_GPIO=5`、`IMU_I2C_ADDR=0x68`、
+- QMI8658C：`IMU_I2C_PORT=0`、`IMU_SDA_GPIO=18`、`IMU_SCL_GPIO=21`、`IMU_I2C_ADDR=0x6A`、
   `IMU_I2C_SPEED_HZ=400000`、`IMU_SAMPLE_INTERVAL_MS=20`（50 Hz）
 - 遥测：`AI_SYSU_ENABLE_TELEMETRY=1`（在 config.h 顶部，需同时打开 IMU）、
   `TELEMETRY_UART_NUM=0`、`TELEMETRY_BAUD_RATE=115200`、`TELEMETRY_SILENCE_LOGS=1`
@@ -170,7 +172,7 @@
 - 电池/音量/屏幕：`self.get_device_status`、`self.audio_speaker.set_volume`、
   `self.screen.set_theme`
 
-MPU6050 数据只通过串口遥测输出（50 Hz JSON），**不在屏幕上显示**。
+QMI8658C 数据只通过串口遥测输出（50 Hz JSON），**不在屏幕上显示**。
 
 姿态由 **Mahony 四元数滤波** 计算：陀螺负责动态跟踪，加速度计修正 pitch/roll；
 yaw 只能靠陀螺积分，没有磁力计，长时间仍会缓慢漂移（上电时会做一次零偏校准，
@@ -270,10 +272,11 @@ yaw 左转为正。pitch 已按规范（机头抬起为正）输出。
 | 摄像头无枚举，`CHECK_SHORT_DEV_DESC FAILED` | DM/DP 接反（D-=GPIO19，D+=GPIO20）、5V/GND、数据线过长 |
 | 电机不转 | DRV8833 `nSLEEP` 接 3.3V、`VM` 电机电源、与 ESP32 共地 |
 | 充电图标不出现/一直充电 | `BATTERY_CHARGING_ACTIVE_LOW` 极性与模块是否一致 |
-| MPU6050 初始化失败 / 串口没有遥测数据 | 地址是 0x68 还是 0x69（AD0）、SDA/SCL 是否接反、模块 3.3V 供电和上拉；看串口 `MPU6050` 日志 |
+| QMI8658C 初始化失败 / 串口没有遥测数据 | 驱动会自动尝试 0x6A/0x6B；检查 SDA=GPIO18、SCL=GPIO21 是否接反、模块 3.3V 供电和上拉；看串口 `QMI8658C` 日志 |
 | 网页收不到遥测数据 | 固件和网页波特率必须一致（当前 115200）、选对 COM 口、先关闭 VS Code 串口监视器 |
 | 遥测数据中混有日志 | 确认 `TELEMETRY_SILENCE_LOGS=1`；遥测开始前的启动日志会被网页忽略 |
 | 白屏/重启 | 先看串口复位原因：`Reset reason: 9` 或 `Brownout` 是供电/接线，`4` 是 panic（保留 backtrace） |
+| 屏幕底部不显示 / 画面上下偏移 | 确认配置为 ST7789 240x284；偏移时调整 `DISPLAY_OFFSET_Y`（先试 0，再试 18） |
 | 电量显示偏差大 | 分压电阻实际值、GPIO1 对地 100nF、`BATTERY_VOLTAGE_SCALE` |
 | 默认音量不生效 | NVS 里已有 `audio/output_volume`，语音调一次或清 NVS |
 | 新增 `.cc` 后链接报 undefined reference | 执行 `idf.py reconfigure` 或 Full Clean |

@@ -21,7 +21,7 @@
 #include "esp_video.h"
 #endif
 #if AI_SYSU_ENABLE_IMU
-#include "mpu6050.h"
+#include "qmi8658c.h"
 #endif
 
 #include <algorithm>
@@ -109,7 +109,7 @@ static void InitializeTelemetry() {
 #endif
 }
 
-static void SendImuTelemetry(const Mpu6050& imu) {
+static void SendImuTelemetry(const Qmi8658c& imu) {
     float roll = imu.roll();
     float pitch = imu.pitch();
     float yaw = imu.yaw();
@@ -231,6 +231,35 @@ public:
         : SpiLcdDisplay(panel_io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y,
                         swap_xy) {}
 
+    void SetupUI() override {
+        SpiLcdDisplay::SetupUI();
+#if defined(DISPLAY_CORNER_INSET) && DISPLAY_CORNER_INSET > 0
+        if (corner_inset_applied_) {
+            return;
+        }
+        DisplayLockGuard lock(this);
+        // 圆角屏：把顶部/底部栏的内容往内缩，避免四个角被面板裁掉
+        if (top_bar_ != nullptr) {
+            lv_obj_set_style_pad_left(top_bar_, DISPLAY_CORNER_INSET, 0);
+            lv_obj_set_style_pad_right(top_bar_, DISPLAY_CORNER_INSET, 0);
+            lv_obj_set_style_pad_top(top_bar_, DISPLAY_CORNER_INSET, 0);
+        }
+        if (bottom_bar_ != nullptr) {
+            lv_obj_set_style_pad_left(bottom_bar_, DISPLAY_CORNER_INSET, 0);
+            lv_obj_set_style_pad_right(bottom_bar_, DISPLAY_CORNER_INSET, 0);
+            lv_obj_set_style_pad_bottom(bottom_bar_, DISPLAY_CORNER_INSET, 0);
+        }
+        // 底部聊天文本原本接近整屏宽，圆角区域会裁到首尾字符
+        if (chat_message_label_ != nullptr) {
+            lv_obj_set_width(chat_message_label_, width_ - 2 * DISPLAY_CORNER_INSET - 8);
+        }
+        if (low_battery_popup_ != nullptr) {
+            lv_obj_set_width(low_battery_popup_, width_ * 17 / 20);
+        }
+        corner_inset_applied_ = true;
+#endif
+    }
+
     void UpdateStatusBar(bool update_all = false) override {
         SpiLcdDisplay::UpdateStatusBar(update_all);
 
@@ -270,15 +299,17 @@ public:
             return;
         }
 
-        // 放大到屏幕的 90%，保持宽高比
-        uint32_t target_w = width_ * 9 / 10;
-        uint32_t target_h = height_ * 9 / 10;
+        // 放大到屏幕的 85%，保持宽高比；留出圆角安全边距
+        uint32_t target_w = width_ * 17 / 20;
+        uint32_t target_h = height_ * 17 / 20;
         uint32_t scale = std::min(256u * target_w / img_dsc->header.w,
                                   256u * target_h / img_dsc->header.h);
         lv_obj_set_size(preview_image_, width_, height_);
         lv_image_set_scale(preview_image_, scale);
     }
 
+private:
+    bool corner_inset_applied_ = false;
 };
 
 class AiSysuEsp32 : public WifiBoard {
@@ -299,7 +330,7 @@ private:
     EspVideo* camera_ = nullptr;
 #endif
 #if AI_SYSU_ENABLE_IMU
-    Mpu6050* imu_ = nullptr;
+    Qmi8658c* imu_ = nullptr;
 #endif
 
     void InitializeSpi() {
@@ -349,6 +380,7 @@ private:
         esp_lcd_panel_reset(panel);
 
         esp_lcd_panel_init(panel);
+        esp_lcd_panel_set_gap(panel, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y);
         esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR);
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
@@ -444,10 +476,10 @@ private:
 
 #if AI_SYSU_ENABLE_IMU
     void InitializeIMU() {
-        imu_ = new Mpu6050(IMU_I2C_PORT, IMU_SDA_GPIO, IMU_SCL_GPIO, IMU_I2C_ADDR,
-                           IMU_I2C_SPEED_HZ);
+        imu_ = new Qmi8658c(IMU_I2C_PORT, IMU_SDA_GPIO, IMU_SCL_GPIO, IMU_I2C_ADDR,
+                            IMU_I2C_SPEED_HZ);
         if (!imu_->Init()) {
-            ESP_LOGE(TAG, "MPU6050 init failed");
+            ESP_LOGE(TAG, "QMI8658C init failed");
             delete imu_;
             imu_ = nullptr;
             return;

@@ -1,5 +1,5 @@
-#ifndef _MPU6050_H_
-#define _MPU6050_H_
+#ifndef _QMI8658C_H_
+#define _QMI8658C_H_
 
 #include <cstddef>
 #include <cstdint>
@@ -7,14 +7,14 @@
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 
-// MPU6050 六轴姿态传感器驱动（I2C）。
+// QMI8658C 六轴姿态传感器驱动（I2C）。
 // 上电时会做一次陀螺零偏校准，校准期间请保持模块静止。
 // yaw 由陀螺 Z 轴积分得到，没有磁力计，长时间会缓慢漂移。
-class Mpu6050 {
+class Qmi8658c {
 public:
-    Mpu6050(i2c_port_num_t port, gpio_num_t sda_gpio, gpio_num_t scl_gpio,
-            uint8_t address = 0x68, uint32_t speed_hz = 400000);
-    ~Mpu6050();
+    Qmi8658c(i2c_port_num_t port, gpio_num_t sda_gpio, gpio_num_t scl_gpio,
+             uint8_t address = 0x6A, uint32_t speed_hz = 400000);
+    ~Qmi8658c();
 
     bool Init();
     bool Update();
@@ -62,7 +62,6 @@ private:
     float gy_ = 0.0f;
     float gz_ = 0.0f;
     float temperature_ = 0.0f;
-    bool is_mpu6500_ = false;
     // Mahony 四元数姿态
     float q0_ = 1.0f;
     float q1_ = 0.0f;
@@ -73,4 +72,4 @@ private:
     float integral_fb_y_ = 0.0f;
 };
 
-#endif  // _MPU6050_H_
+#endif  // _QMI8658C_H_

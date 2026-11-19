@@ -8,7 +8,7 @@
 //   也可以用 -DAI_SYSU_ENABLE_xxx=1 在命令行覆盖。
 // ============================================================================
 
-// MPU6050 六轴姿态传感器（I2C：SDA=GPIO4，SCL=GPIO5）
+// QMI8658C 六轴姿态传感器（I2C：SDA=GPIO18，SCL=GPIO21）
 // 启用后以 50 Hz 读取姿态，供串口遥测使用
 #ifndef AI_SYSU_ENABLE_IMU
 #define AI_SYSU_ENABLE_IMU 1
@@ -20,7 +20,7 @@
 #define AI_SYSU_ENABLE_TELEMETRY 1
 #endif
 
-// DRV8833 双路直流电机（通道 A：GPIO12/13，通道 B：GPIO18/21）
+// DRV8833 双路直流电机（通道 A：GPIO12/13，通道 B：GPIO10/11）
 // 启用后注册 self.motor_a.* / self.motor_b.* MCP 工具，可选上电自检
 #ifndef AI_SYSU_ENABLE_MOTORS
 #define AI_SYSU_ENABLE_MOTORS 0
@@ -181,17 +181,24 @@
 #define DISPLAY_SPI_MODE 0
 #endif
 
-#ifdef CONFIG_LCD_ST7789_240X240_7PIN
+// 本板实际使用 ST7789 240x284 屏。
+// 兼容旧的 sdkconfig 里仍然选中 CONFIG_LCD_ST7789_240X240_7PIN 的情况，
+// 两者都按 240x284 处理，避免必须清工程才能生效。
+#if defined(CONFIG_LCD_ST7789_240X284) || defined(CONFIG_LCD_ST7789_240X240_7PIN)
 #define LCD_TYPE_ST7789_SERIAL
 #define DISPLAY_WIDTH   240
-#define DISPLAY_HEIGHT  240
+#define DISPLAY_HEIGHT  284
 #define DISPLAY_MIRROR_X false
 #define DISPLAY_MIRROR_Y false
 #define DISPLAY_SWAP_XY false
 #define DISPLAY_INVERT_COLOR    true
 #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
 #define DISPLAY_OFFSET_X  0
+// 如果画面整体上下偏移，尝试改成 18（(320-284)/2）
 #define DISPLAY_OFFSET_Y  0
+// 圆角屏安全边距（像素）：顶部/底部状态栏内容向内缩，避免被圆角裁掉。
+// 仍被裁就继续加大，例如 16/20；填 0 可关闭。
+#define DISPLAY_CORNER_INSET 12
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 #define DISPLAY_SPI_MODE 3
 #endif
@@ -339,8 +346,8 @@
 #define MOTOR_A_IN1_GPIO GPIO_NUM_12  // A 通道 IN1
 #define MOTOR_A_IN2_GPIO GPIO_NUM_13  // A 通道 IN2
 // 通道 B
-#define MOTOR_B_IN1_GPIO GPIO_NUM_18  // B 通道 IN1
-#define MOTOR_B_IN2_GPIO GPIO_NUM_21  // B 通道 IN2
+#define MOTOR_B_IN1_GPIO GPIO_NUM_10  // B 通道 IN1
+#define MOTOR_B_IN2_GPIO GPIO_NUM_11  // B 通道 IN2
 // 若 nSLEEP 由 GPIO 控制则填写引脚号；nSLEEP 直接接 3.3V 时保持 GPIO_NUM_NC
 #define MOTOR_A_NSLEEP_GPIO GPIO_NUM_NC  // A 通道 nSLEEP
 #define MOTOR_B_NSLEEP_GPIO GPIO_NUM_NC  // B 通道 nSLEEP
@@ -386,11 +393,11 @@
 // 低电量提醒阈值（百分比），低于该值且未充电时提示充电
 #define BATTERY_LOW_LEVEL 15  // 低电量阈值（%）
 
-// MPU6050 姿态传感器（I2C）
+// QMI8658C 姿态传感器（I2C）
 #define IMU_I2C_PORT 0             // I2C 端口
-#define IMU_SDA_GPIO GPIO_NUM_4    // I2C SDA
-#define IMU_SCL_GPIO GPIO_NUM_5    // I2C SCL
-#define IMU_I2C_ADDR 0x68          // 7 位地址（AD0 接地 0x68，接 3.3V 0x69）
+#define IMU_SDA_GPIO GPIO_NUM_18   // I2C SDA
+#define IMU_SCL_GPIO GPIO_NUM_21   // I2C SCL
+#define IMU_I2C_ADDR 0x6A          // 7 位地址，驱动会自动尝试 0x6A/0x6B（由 SA0 决定）
 #define IMU_I2C_SPEED_HZ 400000    // I2C 时钟频率
 // 50 Hz = 20 ms，对应上位机遥测帧率
 #define IMU_SAMPLE_INTERVAL_MS 20  // 采样周期（ms）
