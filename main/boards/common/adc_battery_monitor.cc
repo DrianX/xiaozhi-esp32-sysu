@@ -1,9 +1,5 @@
 #include "adc_battery_monitor.h"
 
-#include <esp_log.h>
-
-static const char* TAG = "AdcBatteryMonitor";
-
 namespace {
 constexpr adc_atten_t kAdcAtten = ADC_ATTEN_DB_12;
 constexpr adc_bitwidth_t kAdcBitwidth = ADC_BITWIDTH_DEFAULT;
