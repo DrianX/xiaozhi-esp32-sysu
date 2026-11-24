@@ -39,6 +39,30 @@
 #define AI_SYSU_ENABLE_CAMERA 0
 #endif
 
+// 实时摄像头监控（本地 MJPEG HTTP 视频流），显示到电脑网页
+// 依赖 AI_SYSU_ENABLE_CAMERA；启用后注册 self.camera.start_monitor 等工具，
+// 电脑浏览器打开 http://<设备IP>/ 即可看实时画面
+#ifndef AI_SYSU_ENABLE_CAMERA_STREAM
+#define AI_SYSU_ENABLE_CAMERA_STREAM 0
+#endif
+
+// 实时摄像头监控（显示到本机 LCD 屏幕）
+// 依赖 AI_SYSU_ENABLE_CAMERA；可以和上面的网页输出同时开启
+#ifndef AI_SYSU_ENABLE_CAMERA_PREVIEW
+#define AI_SYSU_ENABLE_CAMERA_PREVIEW 0
+#endif
+
+// 实时监控使用的摄像头采集分辨率。640x480 足够预览/网页流，也能降低解码和带宽；
+// 设成 0 表示使用摄像头默认分辨率（本摄像头默认 1280x720，负载会明显更高）
+#define CAMERA_MONITOR_WIDTH 640
+#define CAMERA_MONITOR_HEIGHT 480
+
+// 实时监控 MJPEG 视频流的帧间隔（毫秒）：100 ≈ 10fps；网络卡顿可改成 200
+#define CAMERA_STREAM_FRAME_INTERVAL_MS 100
+// 屏幕预览帧间隔（毫秒）：42 ≈ 24fps；屏幕预览要做 JPEG 解码和缩放，
+// 实际帧率受 CPU 限制，可能低于目标值
+#define CAMERA_PREVIEW_FRAME_INTERVAL_MS 42
+
 #include <driver/gpio.h>
 #include <esp_adc/adc_oneshot.h>
 

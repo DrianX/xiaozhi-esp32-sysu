@@ -20,6 +20,9 @@
 #if AI_SYSU_ENABLE_CAMERA
 #include "esp_video.h"
 #endif
+#if AI_SYSU_ENABLE_CAMERA && (AI_SYSU_ENABLE_CAMERA_STREAM || AI_SYSU_ENABLE_CAMERA_PREVIEW)
+#include "camera_monitor.h"
+#endif
 #if AI_SYSU_ENABLE_IMU
 #include "qmi8658c.h"
 #endif
@@ -329,6 +332,9 @@ private:
 #if AI_SYSU_ENABLE_CAMERA
     EspVideo* camera_ = nullptr;
 #endif
+#if AI_SYSU_ENABLE_CAMERA && (AI_SYSU_ENABLE_CAMERA_STREAM || AI_SYSU_ENABLE_CAMERA_PREVIEW)
+    CameraMonitor* camera_monitor_ = nullptr;
+#endif
 #if AI_SYSU_ENABLE_IMU
     Qmi8658c* imu_ = nullptr;
 #endif
@@ -470,7 +476,12 @@ private:
             .usb_uvc = &usb_uvc_config,
         };
 
+#if AI_SYSU_ENABLE_CAMERA_STREAM || AI_SYSU_ENABLE_CAMERA_PREVIEW
+        camera_ = new EspVideo(video_config, CAMERA_MONITOR_WIDTH, CAMERA_MONITOR_HEIGHT);
+        camera_monitor_ = new CameraMonitor(camera_);
+#else
         camera_ = new EspVideo(video_config);
+#endif
     }
 #endif
 

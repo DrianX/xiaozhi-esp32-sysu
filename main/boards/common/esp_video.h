@@ -2,7 +2,9 @@
 #include "sdkconfig.h"
 
 #include <lvgl.h>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -28,6 +30,8 @@ private:
         v4l2_pix_fmt_t format = 0;
     } frame_;
     v4l2_pix_fmt_t sensor_format_ = 0;
+    uint16_t preferred_width_ = 0;
+    uint16_t preferred_height_ = 0;
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
     uint16_t sensor_width_ = 0;
     uint16_t sensor_height_ = 0;
@@ -42,13 +46,17 @@ private:
     std::string explain_url_;
     std::string explain_token_;
     std::thread encoder_thread_;
+    std::mutex frame_mutex_;
 
 public:
-    EspVideo(const esp_video_init_config_t& config);
+    // width/height 为 0 时使用摄像头默认分辨率
+    EspVideo(const esp_video_init_config_t& config, uint16_t width = 0, uint16_t height = 0);
     ~EspVideo() override;
 
     virtual void SetExplainUrl(const std::string& url, const std::string& token);
     virtual bool Capture();
+    // 取一帧 JPEG 并交给回调（用于本地 MJPEG 视频流）；回调返回 false 表示客户端断开。
+    bool CaptureJpeg(const std::function<bool(const uint8_t* data, size_t len)>& on_frame);
     // 翻转控制函数
     virtual bool SetHMirror(bool enabled) override;
     virtual bool SetVFlip(bool enabled) override;

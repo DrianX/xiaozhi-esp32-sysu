@@ -107,7 +107,8 @@ static void log_available_video_devices() {
 #define CAM_PRINT_FOURCC(pixelformat) (void)0;
 #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
 
-EspVideo::EspVideo(const esp_video_init_config_t& config) {
+EspVideo::EspVideo(const esp_video_init_config_t& config, uint16_t width, uint16_t height)
+    : preferred_width_(width), preferred_height_(height) {
     if (esp_video_init(&config) != ESP_OK) {
         ESP_LOGE(TAG, "esp_video_init failed");
         return;
@@ -193,8 +194,8 @@ EspVideo::EspVideo(const esp_video_init_config_t& config) {
     sensor_width_ = format.fmt.pix.width;
     sensor_height_ = format.fmt.pix.height;
 #endif  // CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-    setformat.fmt.pix.width = format.fmt.pix.width;
-    setformat.fmt.pix.height = format.fmt.pix.height;
+    setformat.fmt.pix.width = preferred_width_ ? preferred_width_ : format.fmt.pix.width;
+    setformat.fmt.pix.height = preferred_height_ ? preferred_height_ : format.fmt.pix.height;
 
     struct v4l2_fmtdesc fmtdesc = {};
     fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -412,6 +413,7 @@ void EspVideo::SetExplainUrl(const std::string& url, const std::string& token) {
 }
 
 bool EspVideo::Capture() {
+    std::lock_guard<std::mutex> lock(frame_mutex_);
     if (encoder_thread_.joinable()) {
         encoder_thread_.join();
     }
@@ -449,11 +451,11 @@ bool EspVideo::Capture() {
             }
 
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-            ESP_LOGW(TAG,
+            ESP_LOGD(TAG,
                      "mmap_buffers_[buf.index].length = %d, sensor_width = %d, sensor_height = %d",
                      mmap_buffers_[buf.index].length, sensor_width_, sensor_height_);
 #else
-            ESP_LOGW(TAG,
+            ESP_LOGD(TAG,
                      "mmap_buffers_[buf.index].length = %d, frame.width = %d, frame.height = %d",
                      mmap_buffers_[buf.index].length, frame_.width, frame_.height);
 #endif  // CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
@@ -888,6 +890,39 @@ bool EspVideo::Capture() {
     return true;
 }
 
+bool EspVideo::CaptureJpeg(const std::function<bool(const uint8_t*, size_t)>& on_frame) {
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    if (!streaming_on_ || video_fd_ < 0) {
+        return false;
+    }
+
+    struct v4l2_buffer buf = {};
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    if (ioctl(video_fd_, VIDIOC_DQBUF, &buf) != 0) {
+        ESP_LOGE(TAG, "CaptureJpeg: VIDIOC_DQBUF failed");
+        return false;
+    }
+
+    bool ok = false;
+    if (sensor_format_ == V4L2_PIX_FMT_JPEG) {
+        ok = on_frame(static_cast<const uint8_t*>(mmap_buffers_[buf.index].start), buf.bytesused);
+    } else {
+        uint8_t* jpeg = nullptr;
+        size_t jpeg_len = 0;
+        if (image_to_jpeg(static_cast<uint8_t*>(mmap_buffers_[buf.index].start), buf.bytesused,
+                          frame_.width, frame_.height, sensor_format_, 80, &jpeg, &jpeg_len)) {
+            ok = on_frame(jpeg, jpeg_len);
+            heap_caps_free(jpeg);
+        }
+    }
+
+    if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+        ESP_LOGE(TAG, "CaptureJpeg: VIDIOC_QBUF failed");
+    }
+    return ok;
+}
+
 bool EspVideo::SetHMirror(bool enabled) {
     if (video_fd_ < 0)
         return false;
@@ -946,6 +981,8 @@ std::expected<std::string, std::string> EspVideo::Explain(const std::string& que
     if (explain_url_.empty()) {
         return std::unexpected("Image explain URL or token is not set");
     }
+
+    std::lock_guard<std::mutex> lock(frame_mutex_);
 
     // 创建局部的 JPEG 队列, 40 entries is about to store 512 * 40 = 20480 bytes of JPEG data
     QueueHandle_t jpeg_queue = xQueueCreate(40, sizeof(JpegChunk));

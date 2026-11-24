@@ -38,7 +38,9 @@
 | `AI_SYSU_ENABLE_TELEMETRY` | 1 | 串口 JSON 遥测，依赖 `AI_SYSU_ENABLE_IMU` |
 | `AI_SYSU_ENABLE_MOTORS` | 0 | 双路 DRV8833 电机、MCP 工具、上电自检 |
 | `AI_SYSU_ENABLE_SERVOS` | 0 | 4 路 SG90 舵机、MCP 工具、上电自检 |
-| `AI_SYSU_ENABLE_CAMERA` | 0 | USB UVC 摄像头和 `self.camera.take_photo` |
+| `AI_SYSU_ENABLE_CAMERA` | 1 | USB UVC 摄像头和 `self.camera.take_photo` |
+| `AI_SYSU_ENABLE_CAMERA_STREAM` | 0 | 实时监控输出到电脑网页（MJPEG），依赖 `AI_SYSU_ENABLE_CAMERA` |
+| `AI_SYSU_ENABLE_CAMERA_PREVIEW` | 1 | 实时监控显示到本机 LCD，依赖 `AI_SYSU_ENABLE_CAMERA` |
 
 ### 如何打开某个功能
 
@@ -73,6 +75,9 @@
 - `MOTOR_BOOT_SELF_TEST` / `SERVO_BOOT_SELF_TEST` 只在对应功能打开时生效
 - 摄像头需要 USB UVC Kconfig；本板 `BOARD_AI_SYSU_USB_CAMERA` 已默认选中，
   通常只需打开 `AI_SYSU_ENABLE_CAMERA`
+- 实时监控还需要单独选择输出方式（默认都关闭）：
+  `AI_SYSU_ENABLE_CAMERA_STREAM=1` 输出到电脑网页，
+  `AI_SYSU_ENABLE_CAMERA_PREVIEW=1` 显示到本机屏幕，两者可同时打开
 - 也可以用命令行宏覆盖（config.h 使用 `#ifndef`）：`-DAI_SYSU_ENABLE_MOTORS=1`
 - 关闭某个功能后，对应驱动不参与编译，也不会初始化硬件或注册 MCP 工具
 
@@ -115,6 +120,8 @@
 | 上位机示例固件（Arduino） | [scripts/mpu6050/firmware/esp32_mpu6050_json/](scripts/mpu6050/firmware/esp32_mpu6050_json/) |
 | 固件端遥测发送 | [ai_sysu_esp32.cc](main/boards/ai-sysu-esp32/ai_sysu_esp32.cc) 的 `SendImuTelemetry()` |
 | USB UVC 摄像头公共驱动 | [esp_video.cc](main/boards/common/esp_video.cc) |
+| 实时监控（网页/本机屏幕） | [camera_monitor.h](main/boards/ai-sysu-esp32/camera_monitor.h)、[camera_monitor.cc](main/boards/ai-sysu-esp32/camera_monitor.cc) |
+| 实时监控 HTTP MJPEG 服务 | [camera_stream.h](main/boards/ai-sysu-esp32/camera_stream.h)、[camera_stream.cc](main/boards/ai-sysu-esp32/camera_stream.cc) |
 | 摄像头 MCP 工具 | [mcp_server.cc](main/mcp_server.cc) 中 `self.camera.take_photo` |
 | 显示 / 状态栏 | [lcd_display.cc](main/display/lcd_display.cc)、[lvgl_display.cc](main/display/lvgl_display/lvgl_display.cc) |
 | 默认音量 | [audio_codec.h](main/audio/audio_codec.h) 的 `output_volume_` |
@@ -153,6 +160,10 @@
   `IMU_I2C_SPEED_HZ=400000`、`IMU_SAMPLE_INTERVAL_MS=20`（50 Hz）
 - 遥测：`AI_SYSU_ENABLE_TELEMETRY=1`（在 config.h 顶部，需同时打开 IMU）、
   `TELEMETRY_UART_NUM=0`、`TELEMETRY_BAUD_RATE=115200`、`TELEMETRY_SILENCE_LOGS=1`
+- 实时监控：`AI_SYSU_ENABLE_CAMERA_STREAM=0`（网页，需同时打开 CAMERA）、
+  `AI_SYSU_ENABLE_CAMERA_PREVIEW=1`（本机屏幕，需同时打开 CAMERA）、
+  `CAMERA_MONITOR_WIDTH=640`、`CAMERA_MONITOR_HEIGHT=480`、
+  `CAMERA_STREAM_FRAME_INTERVAL_MS=100`、`CAMERA_PREVIEW_FRAME_INTERVAL_MS=42`
 
 ## 功能与语音控制
 
@@ -169,6 +180,8 @@
 - 舵机：`self.servo.set_angle`（`channel` 1-4，`angle` 0-180）、
   `self.servo.get_angles`、`self.servo.center_all`
 - 摄像头：`self.camera.take_photo(question)`，示例语音“看看前面是什么”
+- 实时监控（需 `AI_SYSU_ENABLE_CAMERA_STREAM=1`）：`self.camera.start_monitor` /
+  `self.camera.stop_monitor` / `self.camera.get_monitor_url`，示例语音“开始监控”
 - 电池/音量/屏幕：`self.get_device_status`、`self.audio_speaker.set_volume`、
   `self.screen.set_theme`
 
@@ -211,6 +224,46 @@ yaw 只能靠陀螺积分，没有磁力计，长时间仍会缓慢漂移（上�
 
 坐标约定：X+ 前方、Y+ 左方、Z+ 上方；roll 右侧下沉为正、pitch 机头抬起为正、
 yaw 左转为正。pitch 已按规范（机头抬起为正）输出。
+
+## 实时视频监控
+
+先打开摄像头，再选择输出方式（可只开一个，也可同时开）：
+
+```c
+#define AI_SYSU_ENABLE_CAMERA 1
+
+// 输出到电脑网页（MJPEG HTTP）
+#define AI_SYSU_ENABLE_CAMERA_STREAM 1
+
+// 显示到本机 LCD
+#define AI_SYSU_ENABLE_CAMERA_PREVIEW 1
+```
+
+使用：
+
+1. 对设备说“开始监控”
+2. 大模型调用 `self.camera.start_monitor`
+   - 开了 `PREVIEW`：屏幕直接显示摄像头实时画面
+   - 开了 `STREAM`：返回访问地址，电脑和开发板连同一个 Wi-Fi，用 Chrome/Edge 打开
+     `http://<设备IP>/`（直接视频流是 `http://<设备IP>/stream`）
+3. 说“停止监控” → `self.camera.stop_monitor`
+   - 网页流停止
+   - 屏幕预览约 5 秒后自动恢复原来的 UI
+
+配置项：
+
+- `CAMERA_MONITOR_WIDTH` / `CAMERA_MONITOR_HEIGHT`（默认 640x480）：打开任意监控输出时
+  使用这个采集分辨率；设成 0 使用摄像头默认分辨率（本模块默认 1280x720，负载更高）
+- `CAMERA_STREAM_FRAME_INTERVAL_MS`（默认 100，约 10fps，网页）
+- `CAMERA_PREVIEW_FRAME_INTERVAL_MS`（默认 42，目标约 24fps，本机屏幕；实际帧率受
+  JPEG 解码和 LVGL 缩放限制，可能低于 24）
+- 屏幕预览需要把 720p MJPEG 解码成 RGB565，CPU 占用较高；同时打开网页和屏幕时，
+  两者会共享摄像头和 CPU，建议优先只开一个
+- 语音同时出现卡顿时，优先降低帧率或只保留一种输出
+- 网页端口固定 80，不需要安装任何电脑软件
+
+查询监控状态也可以说“监控地址是什么”，对应 `self.camera.get_monitor_url`，
+返回 `{"screen":true/false,"web":"http://..."}`。
 
 ## USB 摄像头
 
